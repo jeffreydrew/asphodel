@@ -252,45 +252,10 @@ function onPointerDown(e) {
   if (e.button !== 0) return;
   if (editMode?.enabled) return; // edit mode handles its own pointer events
   didDrag = false;
-
-  raycaster.setFromCamera(getNDC(e), camera);
-  const hits = raycaster.intersectObjects(collectFurnMeshes());
-  if (hits.length > 0) {
-    const root = hits[0].object.userData.furnitureRoot;
-    if (root) {
-      controls.enabled = false;
-      _dragPlane.constant = -root.userData.floorY;
-      dragTarget = root;
-      renderer.domElement.style.cursor = 'grabbing';
-      if (raycaster.ray.intersectPlane(_dragPlane, _dragIntersect)) {
-        root.userData.dragOffset = {
-          x: _dragIntersect.x - root.position.x,
-          z: _dragIntersect.z - root.position.z,
-        };
-      }
-    }
-  }
 }
 
 function onPointerMove(e) {
   if (editMode?.enabled) return;
-  if (!dragTarget) {
-    raycaster.setFromCamera(getNDC(e), camera);
-    if (furnitureMeshes.length > 0) {
-      const hits = raycaster.intersectObjects(collectFurnMeshes());
-      renderer.domElement.style.cursor = hits.length > 0 ? 'grab' : '';
-    }
-    return;
-  }
-
-  didDrag = true;
-  raycaster.setFromCamera(getNDC(e), camera);
-  if (raycaster.ray.intersectPlane(_dragPlane, _dragIntersect)) {
-    const off  = dragTarget.userData.dragOffset ?? { x: 0, z: 0 };
-    const half = FLOOR_SIZE / 2 - 0.8;
-    dragTarget.position.x = Math.max(-half, Math.min(half, _dragIntersect.x - off.x));
-    dragTarget.position.z = Math.max(-half, Math.min(half, _dragIntersect.z - off.z));
-  }
 }
 
 function onPointerUp() {

@@ -943,7 +943,7 @@ body {
 
 .edit-toggle-btn {
   position: fixed;
-  left: 18px;
+  right: 18px;
   bottom: 80px;
   z-index: 200;
   background: var(--glass-bg);
@@ -967,7 +967,7 @@ body {
 
 .edit-panel {
   position: fixed;
-  left: 18px;
+  right: 18px;
   bottom: 118px;
   z-index: 200;
   width: 220px;
@@ -1094,6 +1094,53 @@ body {
   opacity: 0.3;
   cursor: default;
   pointer-events: none;
+}
+
+.edit-scale-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.edit-scale-row .edit-small-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+.edit-scale-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.15);
+  outline: none;
+  cursor: pointer;
+}
+.edit-scale-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ff88;
+  cursor: pointer;
+}
+.edit-scale-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ff88;
+  border: none;
+  cursor: pointer;
+}
+.edit-scale-readout {
+  margin-top: 3px;
+  color: #00ff88;
+  font-size: 9px;
+  text-align: center;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
 }
 
 .edit-hints {

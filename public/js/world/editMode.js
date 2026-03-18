@@ -173,6 +173,29 @@ export class EditMode {
     document.getElementById('edit-undo-btn').addEventListener('click', () => this.undo());
     document.getElementById('edit-redo-btn').addEventListener('click', () => this.redo());
 
+    // Scale controls
+    const slider   = document.getElementById('edit-scale-slider');
+    const scaleVal = document.getElementById('edit-scale-value');
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      scaleVal.textContent = v.toFixed(2);
+      this._scaleSelected(v, false); // live preview — no undo entry yet
+    });
+    slider.addEventListener('change', () => {
+      const v = parseFloat(slider.value);
+      this._scaleSelected(v, true); // commit with undo on release
+    });
+    document.getElementById('edit-scale-down').addEventListener('click', () => {
+      const cur = this._selected ? this._selected.scale.x : parseFloat(slider.value);
+      const next = Math.max(0.5, parseFloat((cur - 0.25).toFixed(2)));
+      this._applyScaleUI(next, true);
+    });
+    document.getElementById('edit-scale-up').addEventListener('click', () => {
+      const cur = this._selected ? this._selected.scale.x : parseFloat(slider.value);
+      const next = Math.min(15, parseFloat((cur + 0.25).toFixed(2)));
+      this._applyScaleUI(next, true);
+    });
+
     // Rotate buttons
     document.getElementById('edit-rot-left').addEventListener('click', () => {
       this._rotateSelected(Math.PI / 4);
@@ -315,6 +338,7 @@ export class EditMode {
 
     // Show props panel
     document.getElementById('edit-props').style.display = 'block';
+    this._syncScaleUI();
   }
 
   _clearSelection() {
@@ -369,6 +393,41 @@ export class EditMode {
       data: { obj: this._selected, oldRotY, newRotY: this._selected.rotation.y },
     });
     this._updateHighlight();
+  }
+
+  _scaleSelected(newScale, pushUndo) {
+    if (!this._selected) return;
+    if (!this._selected.userData?.isFurniture) return; // only scale furniture
+    const oldScale = this._selected.scale.x;
+    this._selected.scale.setScalar(newScale);
+    this._updateHighlight();
+    if (pushUndo && Math.abs(newScale - oldScale) > 0.001) {
+      // If the last undo entry was also a scale on the same object (slider drag),
+      // collapse it instead of stacking many tiny entries.
+      const last = this._undoStack[this._undoStack.length - 1];
+      if (last && last.type === 'scale' && last.data.obj === this._selected) {
+        last.data.newScale = newScale;
+      } else {
+        this._pushUndo({ type: 'scale', data: { obj: this._selected, oldScale, newScale } });
+      }
+    }
+  }
+
+  _applyScaleUI(value, pushUndo) {
+    const slider   = document.getElementById('edit-scale-slider');
+    const scaleVal = document.getElementById('edit-scale-value');
+    slider.value = value;
+    scaleVal.textContent = value.toFixed(2);
+    this._scaleSelected(value, pushUndo);
+  }
+
+  _syncScaleUI() {
+    if (!this._selected) return;
+    const v = this._selected.scale.x;
+    const slider   = document.getElementById('edit-scale-slider');
+    const scaleVal = document.getElementById('edit-scale-value');
+    slider.value = Math.min(15, Math.max(0.5, v));
+    scaleVal.textContent = v.toFixed(2);
   }
 
   _updateHighlight() {
@@ -510,6 +569,12 @@ export class EditMode {
         invalidateAllNavGrids();
         break;
       }
+      case 'scale': {
+        const { obj, oldScale } = entry.data;
+        obj.scale.setScalar(oldScale);
+        this._syncScaleUI();
+        break;
+      }
       case 'cut-doorway': {
         // Undo doorway → remove new segments, restore original mesh
         const { originalMesh, newMeshes, parentGroup } = entry.data;
@@ -557,6 +622,12 @@ export class EditMode {
         const { mesh } = entry.data;
         mesh.parent?.remove(mesh);
         invalidateAllNavGrids();
+        break;
+      }
+      case 'scale': {
+        const { obj, newScale } = entry.data;
+        obj.scale.setScalar(newScale);
+        this._syncScaleUI();
         break;
       }
       case 'cut-doorway': {
@@ -921,6 +992,16 @@ export class EditMode {
       this._rotateSelected(Math.PI / 4);
     } else if (e.key === 'e' || e.key === 'E') {
       this._rotateSelected(-Math.PI / 4);
+    } else if (e.key === '[') {
+      if (this._selected?.userData?.isFurniture) {
+        const next = Math.max(0.5, parseFloat((this._selected.scale.x - 0.25).toFixed(2)));
+        this._applyScaleUI(next, true);
+      }
+    } else if (e.key === ']') {
+      if (this._selected?.userData?.isFurniture) {
+        const next = Math.min(15, parseFloat((this._selected.scale.x + 0.25).toFixed(2)));
+        this._applyScaleUI(next, true);
+      }
     }
   }
 
@@ -933,7 +1014,7 @@ export class EditMode {
     const floorIndex = this._activeFloorIndex();
     const floorY = this._activeFloorY();
     const path = KIT + item.file;
-    const scale = 7.5;
+    const scale = 3.75;
     const parentGroup = this._activeGroup();
 
     this._gltfLoader.load(path, (gltf) => {

@@ -61,35 +61,10 @@ function buildFloor(scene, floorGroups, floor, index) {
 
   buildFloorWalls(floor.y, index, group);
 
-  // Ceiling light fixtures — 3×3 grid
-  const fixturePositions = [
-    [0, 0], [-28, -28], [0, -28], [28, -28],
-    [-28, 0],            [28, 0],
-    [-28, 28], [0, 28],  [28, 28],
-  ];
-  for (const [fx, fz] of fixturePositions) {
-    const fix = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 0.1, 1.6),
-      new THREE.MeshBasicMaterial({ color: floor.lightColor }),
-    );
-    fix.position.set(fx, floor.y + WALL_HEIGHT - 0.05, fz);
-    group.add(fix);
-  }
-
   // Main central light — high power, wide range
   const mainLight = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 3, 120, 1.2);
   mainLight.position.set(0, floor.y + WALL_HEIGHT * 0.85, 0);
   group.add(mainLight);
-
-  // 3×3 grid of fill lights (skip center — covered by main)
-  for (const fx of [-28, 0, 28]) {
-    for (const fz of [-28, 0, 28]) {
-      if (fx === 0 && fz === 0) continue;
-      const fill = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 1.5, 70, 1.2);
-      fill.position.set(fx, floor.y + WALL_HEIGHT * 0.8, fz);
-      group.add(fill);
-    }
-  }
 
   // Edge accent lights (mid-wall, lower — add warmth near perimeter)
   for (const [ex, ez] of [[-38, 0], [38, 0], [0, -38], [0, 38]]) {

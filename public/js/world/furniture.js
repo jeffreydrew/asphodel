@@ -14,11 +14,11 @@ import { FLOORS, KIT } from './constants.js';
 export function loadFurniture(floorGroups, gltfLoader, furnitureMeshes) {
   const k = KIT;
   // s = standard furniture scale (Kenney kit is ~1 unit = 1m at scale 1.0)
-  const s = 7.5;
-  // Desk-top y-offset for items placed ON a desk/counter at scale 7.5
-  const deskY = 6.25;
+  const s = 3.75;
+  // Desk-top y-offset for items placed ON a desk/counter at scale 3.75
+  const deskY = 3.125;
   // Upper-cabinet y-offset
-  const upperY = 12.9;
+  const upperY = 6.45;
 
   // ── LOBBY ─────────────────────────────────────────────────────────────────
   const g0 = floorGroups[0], L = FLOORS[0].y;
@@ -199,32 +199,32 @@ export function loadFurniture(floorGroups, gltfLoader, furnitureMeshes) {
   // Apt 1 (x=-40..-24, z=8..40)
   glb(`${k}bedDouble.glb`,          -32, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}cabinetBed.glb`,         -28, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,     -28, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,     -28, Be + 2.5, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}coatRack.glb`,           -37, Be,  12, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}rugRounded.glb`,         -32, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
 
   // Apt 2 (x=-24..-8, z=8..40)
   glb(`${k}bedDouble.glb`,          -16, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}cabinetBed.glb`,         -12, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,     -12, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,     -12, Be + 2.5, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}rugRounded.glb`,         -16, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
 
   // Apt 3 (x=-8..8, z=8..40)
   glb(`${k}bedSingle.glb`,            0, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}cabinetBed.glb`,           4, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,       4, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,       4, Be + 2.5, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}rugRounded.glb`,           0, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
 
   // Apt 4 (x=8..24, z=8..40)
   glb(`${k}bedSingle.glb`,           16, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}cabinetBed.glb`,          20, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,      20, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,      20, Be + 2.5, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}rugRounded.glb`,          16, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
 
   // Apt 5 (east, x=16..40, z=-16..8)
   glb(`${k}bedDouble.glb`,           30, Be,  -4, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}cabinetBed.glb`,          36, Be,   2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,      36, Be + 5.0, 2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,      36, Be + 2.5, 2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}sideTableDrawers.glb`,    36, Be, -10, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
   glb(`${k}bookcaseClosedWide.glb`,  36, Be, -14, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
 
