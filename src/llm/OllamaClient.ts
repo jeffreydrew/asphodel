@@ -1,3 +1,5 @@
+import { llmQueue } from './LlmQueue';
+
 const OLLAMA_URL         = process.env['OLLAMA_URL'] ?? 'http://localhost:11434';
 const MODEL              = process.env['OLLAMA_MODEL'] ?? 'qwen2.5:7b';
 const TIMEOUT_MS         = Number(process.env['OLLAMA_TIMEOUT_MS'] ?? 30_000);
@@ -21,10 +23,17 @@ export class OllamaClient {
 
   async chat(
     messages: OllamaChatMessage[],
-    opts: { json?: boolean; temperature?: number; long?: boolean } = {},
+    opts: { json?: boolean; temperature?: number; long?: boolean; model?: string } = {},
+  ): Promise<string | null> {
+    return llmQueue.run(() => this._doChat(messages, opts));
+  }
+
+  private async _doChat(
+    messages: OllamaChatMessage[],
+    opts: { json?: boolean; temperature?: number; long?: boolean; model?: string },
   ): Promise<string | null> {
     const body = {
-      model:    this.model,
+      model:    opts.model ?? this.model,
       messages,
       stream:   false,
       format:   opts.json ? 'json' : undefined,

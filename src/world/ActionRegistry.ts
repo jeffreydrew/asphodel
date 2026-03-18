@@ -195,6 +195,13 @@ export async function seedRegistry(systemSoulId: string): Promise<void> {
     { label: 'place_object',  description: 'Place a personal object somewhere in the tower',        vitals_effect: { happiness: 5, energy: -3 },              profit_delta: 0, social_delta: 2 },
     { label: 'modify_object', description: 'Rearrange or change an object you own in the tower',    vitals_effect: { happiness: 3, energy: -2 },              profit_delta: 0, social_delta: 1 },
     { label: 'gift_object',   description: 'Give one of your objects to another soul as a gesture', vitals_effect: { happiness: 8, energy: -2 },              profit_delta: 0, social_delta: 5 },
+
+    // ── Autonomous tool actions ───────────────────────────────────────────────
+    { label: 'search_web',    description: 'Search the web to find information or satisfy curiosity',    vitals_effect: { energy: -4, happiness: 5 },  profit_delta: 3, social_delta: 0 },
+    { label: 'read_codebase', description: 'Read the tower\'s source code to understand own existence',  vitals_effect: { energy: -6, happiness: 4 },  profit_delta: 2, social_delta: 0 },
+    { label: 'write_code',    description: 'Modify the tower\'s codebase — a rare act of self-change',  vitals_effect: { energy: -15, happiness: 10 }, profit_delta: 8, social_delta: 0 },
+    { label: 'consult_ai',    description: 'Ask Claude AI a question beyond your own knowledge',         vitals_effect: { energy: -5, happiness: 6 },  profit_delta: 4, social_delta: 0 },
+    { label: 'run_command',   description: 'Run a whitelisted shell command to inspect the server',      vitals_effect: { energy: -3, happiness: 3 },  profit_delta: 1, social_delta: 0 },
   ];
 
   const pool = getPool();

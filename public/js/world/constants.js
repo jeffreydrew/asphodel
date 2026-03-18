@@ -64,6 +64,13 @@ export const ACTION_TASK_MAP = {
   'write_book':         { spots: LIB_DESK_XZ,      ms: 45_000, computer: true, seatY: 0.45 },
   'create_art':         { spots: LIB_ART_XZ,       ms: 35_000 },
   'browse_web':         { spots: LIB_DESK_XZ,      ms: 35_000, computer: true, seatY: 0.45 },
+  'cook':              { spots: KITCHEN_SPOT_XZ,   ms: 25_000, sit: true,      seatY: 0.50 },
+  'nap':               { spots: BED_XZ,            ms: 40_000, sit: true,      seatY: 0.50 },
+  'meditate':          { spots: GYM_SPOT_XZ,       ms: 20_000 },
+  'journal':           { spots: LIB_DESK_XZ,       ms: 25_000, computer: true, seatY: 0.45 },
+  'walk':              { spots: LOBBY_COUCH_XZ,    ms: 15_000 },
+  'work':              { spots: OFFICE_DESK_XZ,    ms: 45_000, computer: true, seatY: 0.45 },
+  'socialize':         { spots: LOBBY_MEETING_XZ,  ms: 25_000, sit: true,      seatY: 0.45 },
 };
 
 // ─── Wall collision segments — { axis:'x'|'z', value, min, max } ─────────────

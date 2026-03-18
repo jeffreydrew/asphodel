@@ -263,5 +263,31 @@ export async function applySchema(pool: Pool): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+
+    CREATE TABLE IF NOT EXISTS soul_knowledge (
+      id       TEXT   PRIMARY KEY,
+      soul_id  TEXT   NOT NULL,
+      query    TEXT   NOT NULL,
+      findings TEXT   NOT NULL,
+      source   TEXT   NOT NULL,
+      metadata JSONB,
+      ts       BIGINT NOT NULL,
+      FOREIGN KEY (soul_id) REFERENCES souls(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_soul_knowledge_soul_id ON soul_knowledge(soul_id, ts);
+
+    CREATE TABLE IF NOT EXISTS codebase_changes (
+      id          TEXT   PRIMARY KEY,
+      soul_id     TEXT   NOT NULL,
+      file_path   TEXT   NOT NULL,
+      description TEXT   NOT NULL,
+      diff        TEXT   NOT NULL,
+      status      TEXT   NOT NULL DEFAULT 'pending',
+      ts          BIGINT NOT NULL,
+      FOREIGN KEY (soul_id) REFERENCES souls(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_codebase_changes_soul_id ON codebase_changes(soul_id, ts);
   `);
 }

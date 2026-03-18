@@ -114,7 +114,7 @@ export async function runConversation(
 
       const raw = await ollama.chat(
         [{ role: 'user', content: prompt }],
-        { json: true, temperature: 0.85 },
+        { json: true, temperature: 0.85, model: speaker.identity.llm_model },
       );
 
       let text = '';

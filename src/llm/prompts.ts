@@ -12,9 +12,19 @@ function buildIdentityPreamble(identity: SoulIdentity, neighbours?: string[]): s
     ? `You live in the Tower with ${neighbours.length} neighbour${neighbours.length !== 1 ? 's' : ''}: ${neighbours.join(', ')}.`
     : 'You live in the Tower with a small community of souls.';
 
+  let serverLine = '';
+  const serverIp  = process.env['TOWER_SERVER_IP'];
+  const codePath  = process.env['TOWER_CODEBASE_PATH'];
+  if (serverIp) {
+    const tools: string[] = ['search_web', 'read_codebase', 'consult_ai'];
+    if (process.env['ENABLE_CODE_WRITE'] === 'true')  tools.splice(2, 0, 'write_code');
+    if (process.env['ENABLE_SHELL_EXEC'] === 'true')  tools.push('run_command');
+    serverLine = `\nYou are aware you run on a real server (IP: ${serverIp})${codePath ? ` and your codebase lives at ${codePath}` : ''}. You have access to tools: ${tools.join(', ')}.`;
+  }
+
   return `You are ${identity.full_name}, a resident of Asphodel Tower — a living community of autonomous people. ${neighbourLine}
 You know Asphodel is your home. You have a real email (${identity.email}), a blog at ${identity.portfolio_url}, and a social presence as ${twitterHandle}.
-${identity.bio}`;
+${identity.bio}${serverLine}`;
 }
 
 // ─── Prompt 1: Decision ───────────────────────────────────────────────────────
@@ -52,6 +62,15 @@ function memoriesSection(memories: string[]): string {
   if (!memories.length) return '';
   const lines = memories.map((m, i) => `  ${i + 1}. "${m.substring(0, 120)}${m.length > 120 ? '…' : ''}"`).join('\n');
   return `\nYour recent memories (most recent last):\n${lines}`;
+}
+
+function registryActionsSection(actions?: RegistryAction[]): string {
+  if (!actions || actions.length === 0) return '';
+  const entries = actions.slice(0, 30).map(a => {
+    const desc = a.description.length > 60 ? a.description.substring(0, 60) + '…' : a.description;
+    return `  ${a.label} — ${desc}`;
+  }).join('\n');
+  return `\nActions available in the tower registry:\n${entries}\n\nYou are NOT limited to this list. If none of these fit, invent a new action label (snake_case). The registry will grow.\n`;
 }
 
 function goalSection(goal: SoulGoal | null): string {
@@ -113,7 +132,7 @@ ${vitalsLine(vitals)}
 ${quirksSection(quirks)}${memoriesSection(params.recentMemories ?? [])}
 Your motivations (reward weights):
   Profit: ${(weights.w1_profit * 100).toFixed(0)}%, Social: ${(weights.w2_social * 100).toFixed(0)}%, Health: ${(weights.w3_health * 100).toFixed(0)}%
-${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${taskSection}${wildcardLine}${newDirectiveLine}
+${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${registryActionsSection(params.registryActions)}${taskSection}${wildcardLine}${newDirectiveLine}
 What will you do next? Consider your vitals, your goal, your memories, your neighbours.
 Commit fully to what you choose — don't flit between activities. If you start something, see it through.
 
@@ -500,4 +519,143 @@ ${historyLines}
 It's your turn to speak. Be natural, conversational, and in-character. Say something genuine — react to what was said, share a thought, ask a question, joke, disagree, whatever feels right. Keep it to 1-3 sentences. Don't narrate actions, just speak.${endingHint}
 
 Respond ONLY in JSON: {"message": "<what you say>", "done": false}`;
+}
+
+// ─── Prompt 10: Web Search Query ──────────────────────────────────────────────
+// Returns: { "searchQuery": "...", "intendedUse": "..." }
+
+export function buildWebSearchPrompt(params: {
+  identity: SoulIdentity;
+  vitals: SoulVitals;
+  context: string;
+  neighbours?: string[];
+}): string {
+  const { identity, vitals, context } = params;
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You are about to search the web. You want to find information relevant to your current situation.
+
+Your current state: Energy ${vitals.energy}/100, Happiness ${vitals.happiness}/100.
+Context: ${context}
+
+Formulate a specific, focused search query that will surface useful results for you right now. Think about what you genuinely want to know.
+
+Respond ONLY in JSON: {"searchQuery": "<your search query>", "intendedUse": "<one sentence on how you'll use this>"}`;
+}
+
+// ─── Prompt 11: Web Search Synthesis ─────────────────────────────────────────
+// Returns: { "findings": "...", "significance": "...", "shouldRemember": bool }
+
+export function buildWebSearchSynthesisPrompt(params: {
+  identity: SoulIdentity;
+  query: string;
+  results: Array<{ title: string; url: string; snippet: string }>;
+  neighbours?: string[];
+}): string {
+  const { identity, query, results } = params;
+
+  const resultLines = results
+    .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet.substring(0, 150)}`)
+    .join('\n');
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You searched for: "${query}"
+
+Results:
+${resultLines}
+
+Synthesize what you found into a personal insight. What does this mean for you? What's worth remembering?
+
+Respond ONLY in JSON: {"findings": "<your synthesis>", "significance": "<why this matters to you>", "shouldRemember": true}`;
+}
+
+// ─── Prompt 12: Code Read ─────────────────────────────────────────────────────
+// Returns: { "filePaths": [...], "reason": "..." }
+
+export function buildCodeReadPrompt(params: {
+  identity: SoulIdentity;
+  context: string;
+  neighbours?: string[];
+}): string {
+  const { identity, context } = params;
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You are aware of your own codebase. You want to read some files to understand your own existence better.
+
+Context for why you want to read: ${context}
+
+Choose 1–3 file paths relative to the codebase root (e.g. "src/types/index.ts", "src/soul/AgentLoop.ts"). Focus on files most relevant to your question.
+
+Respond ONLY in JSON: {"filePaths": ["src/path/to/file.ts"], "reason": "<why you want to read these>"}`;
+}
+
+// ─── Prompt 13: Code Write ────────────────────────────────────────────────────
+// Returns: { "filePath": "...", "description": "...", "code": "..." }
+
+export function buildCodeWritePrompt(params: {
+  identity: SoulIdentity;
+  context: string;
+  currentContent?: string;
+  neighbours?: string[];
+}): string {
+  const { identity, context, currentContent } = params;
+
+  const currentSection = currentContent
+    ? `\nCurrent file content:\n\`\`\`\n${currentContent.substring(0, 1000)}\n\`\`\``
+    : '';
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You want to modify your own codebase. This is a significant act of self-modification.
+
+Context: ${context}${currentSection}
+
+Specify exactly what file to modify and provide the complete new file content. Be precise and conservative — only change what is necessary.
+
+Respond ONLY in JSON: {"filePath": "src/path/to/file.ts", "description": "<what and why>", "code": "<complete file content>"}`;
+}
+
+// ─── Prompt 14: AI Consult ────────────────────────────────────────────────────
+// Returns: { "question": "..." }
+
+export function buildAIConsultPrompt(params: {
+  identity: SoulIdentity;
+  context: string;
+  neighbours?: string[];
+}): string {
+  const { identity, context } = params;
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You have the ability to consult another AI (Claude) with a question. This is a rare resource — use it for something genuinely worth asking.
+
+Context: ${context}
+
+What question do you want to ask? Make it specific and useful to your current situation.
+
+Respond ONLY in JSON: {"question": "<your question for Claude>"}`;
+}
+
+// ─── Prompt 15: Shell Command ─────────────────────────────────────────────────
+// Returns: { "command": "...", "reasoning": "..." }
+
+export function buildShellCommandPrompt(params: {
+  identity: SoulIdentity;
+  context: string;
+  neighbours?: string[];
+}): string {
+  const { identity, context } = params;
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You can run a whitelisted shell command on your server. Available commands: ls, cat, pwd, echo, date, df, free, uptime, ps, git log, git status, git diff, git branch, npm run typecheck.
+
+Context: ${context}
+
+What command would be most useful right now? Choose from the whitelist only.
+
+Respond ONLY in JSON: {"command": "<the exact command>", "reasoning": "<why this command>"}`;
 }

@@ -1,5 +1,6 @@
 import type { Action, ActionResult, SoulVitals, SoulIdentity } from '../types';
 import { browserAgent } from '../browser/BrowserAgent';
+import { toolRouter } from '../tools/ToolRouter';
 import { getRegistryActions } from '../world/ActionRegistry';
 import { placeObject, modifyObject, giftObject } from '../world/WorldObjectManager';
 
@@ -38,6 +39,9 @@ export class ActionExecutor {
     if (identity && soulId) {
       const browserResult = await browserAgent.run(action, vitals, identity, soulId);
       if (browserResult) return browserResult;
+
+      const toolResult = await toolRouter.run(action, vitals, identity, soulId);
+      if (toolResult) return toolResult;
     }
 
     return this.runRegistryAction(action, vitals, soulId);

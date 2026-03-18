@@ -24,6 +24,7 @@ const SEEDS: SoulSeed[] = [
       location_public: 'Remote',
       profile_photo: 'mira_avatar.jpg',
       payment_method: 'abstract_wallet',
+      llm_model: 'mistral:7b',
     },
     vitals: { hunger: 40, energy: 75, health: 80, happiness: 65, sleep_debt: 20 },
     reward_weights: { w1_profit: 0.35, w2_social: 0.45, w3_health: 0.20 },
@@ -41,6 +42,7 @@ const SEEDS: SoulSeed[] = [
       location_public: 'Remote',
       profile_photo: 'kai_avatar.jpg',
       payment_method: 'abstract_wallet',
+      llm_model: 'qwen2.5:7b',
     },
     vitals: { hunger: 55, energy: 80, health: 70, happiness: 60, sleep_debt: 15 },
     reward_weights: { w1_profit: 0.60, w2_social: 0.25, w3_health: 0.15 },
@@ -58,6 +60,7 @@ const SEEDS: SoulSeed[] = [
       location_public: 'Remote',
       profile_photo: 'amara_avatar.jpg',
       payment_method: 'abstract_wallet',
+      llm_model: 'llama3.2:3b',
     },
     vitals: { hunger: 30, energy: 90, health: 95, happiness: 75, sleep_debt: 5 },
     reward_weights: { w1_profit: 0.20, w2_social: 0.35, w3_health: 0.45 },
@@ -75,6 +78,7 @@ const SEEDS: SoulSeed[] = [
       location_public: 'Remote',
       profile_photo: 'devon_avatar.jpg',
       payment_method: 'abstract_wallet',
+      llm_model: 'qwen2.5:7b',
     },
     vitals: { hunger: 60, energy: 65, health: 72, happiness: 70, sleep_debt: 30 },
     reward_weights: { w1_profit: 0.40, w2_social: 0.40, w3_health: 0.20 },
@@ -92,6 +96,7 @@ const SEEDS: SoulSeed[] = [
       location_public: 'Remote',
       profile_photo: 'zoe_avatar.jpg',
       payment_method: 'abstract_wallet',
+      llm_model: 'llama3.2:3b',
     },
     vitals: { hunger: 45, energy: 70, health: 78, happiness: 80, sleep_debt: 10 },
     reward_weights: { w1_profit: 0.25, w2_social: 0.55, w3_health: 0.20 },
@@ -116,6 +121,12 @@ export async function seedSouls(): Promise<void> {
          ON CONFLICT (email) DO NOTHING
          RETURNING id`,
         [soulId, seed.name, seed.email, seed.identity, seed.vitals, seed.reward_weights, now],
+      );
+
+      // Patch llm_model into identity for existing souls (idempotent)
+      await client.query(
+        `UPDATE souls SET identity = identity || $1::jsonb WHERE email = $2`,
+        [JSON.stringify({ llm_model: seed.identity.llm_model }), seed.email],
       );
 
       // Only create wallet if soul was actually inserted (not a duplicate)

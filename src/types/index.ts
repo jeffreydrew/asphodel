@@ -15,6 +15,12 @@ export enum ActionType {
   WRITE_BOOK      = 'write_book',
   CREATE_ART      = 'create_art',
   BROWSE_WEB      = 'browse_web',
+  // Autonomous tool actions
+  SEARCH_WEB      = 'search_web',
+  READ_CODEBASE   = 'read_codebase',
+  WRITE_CODE      = 'write_code',
+  CONSULT_AI      = 'consult_ai',
+  RUN_COMMAND     = 'run_command',
 }
 
 // Base cooldowns in ms. Multiply by COOLDOWN_SCALE env var to speed up / slow down.
@@ -38,6 +44,12 @@ export const COOLDOWNS: Record<ActionType, number> = {
   [ActionType.WRITE_BOOK]:     90_000  * SCALE,
   [ActionType.CREATE_ART]:     75_000  * SCALE,
   [ActionType.BROWSE_WEB]:     35_000  * SCALE,
+  // Tool cooldowns
+  [ActionType.SEARCH_WEB]:     40_000  * SCALE,
+  [ActionType.READ_CODEBASE]:  30_000  * SCALE,
+  [ActionType.WRITE_CODE]:    120_000  * SCALE,
+  [ActionType.CONSULT_AI]:     60_000  * SCALE,
+  [ActionType.RUN_COMMAND]:    45_000  * SCALE,
 };
 
 // ─── Soul ────────────────────────────────────────────────────────────────────
@@ -66,6 +78,7 @@ export interface SoulIdentity {
   location_public: string;
   profile_photo: string;
   payment_method: string;
+  llm_model?: string;   // per-soul model override; falls back to OLLAMA_MODEL env var
 }
 
 export interface SoulRecord {
@@ -359,6 +372,68 @@ export interface Conversation {
   status: 'active' | 'ended';
   started_at: number;
   ended_at: number | null;
+}
+
+// ─── Tool Results ─────────────────────────────────────────────────────────────
+
+export interface WebSearchResult {
+  title:   string;
+  url:     string;
+  snippet: string;
+}
+
+export interface WebSearchFindings {
+  query:   string;
+  results: WebSearchResult[];
+  source:  string;
+}
+
+export interface CodeReadResult {
+  filePath:  string;
+  content:   string;
+  truncated: boolean;
+}
+
+export interface CodeWriteResult {
+  filePath:    string;
+  description: string;
+  success:     boolean;
+  error?:      string;
+}
+
+export interface AIConsultResult {
+  question:     string;
+  answer:       string;
+  model:        string;
+  input_tokens: number;
+}
+
+export interface ShellExecResult {
+  command:  string;
+  stdout:   string;
+  stderr:   string;
+  exitCode: number;
+  timedOut: boolean;
+}
+
+export interface SoulKnowledgeRow {
+  id:       string;
+  soul_id:  string;
+  query:    string;
+  findings: string;
+  source:   string;
+  metadata: Record<string, unknown> | null;
+  ts:       number;
+}
+
+export interface CodebaseChangeRow {
+  id:          string;
+  soul_id:     string;
+  file_path:   string;
+  description: string;
+  diff:        string;
+  status:      string;
+  ts:          number;
 }
 
 // ─── Speech Bubbles (WebSocket) ──────────────────────────────────────────────

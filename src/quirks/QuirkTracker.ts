@@ -28,6 +28,26 @@ const ACTION_QUIRK_MAP: Record<string, { quirkId: string; trigger: string }> = {
     quirkId: 'recluse',
     trigger: 'avoids meeting actions when happiness < 40',
   },
+  'search_web': {
+    quirkId: 'knowledge_seeker',
+    trigger: 'searches the web to satisfy curiosity before acting on assumptions',
+  },
+  'read_codebase': {
+    quirkId: 'knowledge_seeker',
+    trigger: 'searches the web to satisfy curiosity before acting on assumptions',
+  },
+  'write_code': {
+    quirkId: 'self_modifier',
+    trigger: 'modifies own codebase when convinced a change will improve existence',
+  },
+  'consult_ai': {
+    quirkId: 'ai_collaborator',
+    trigger: 'consults external AI when facing questions beyond own knowledge',
+  },
+  'run_command': {
+    quirkId: 'system_inspector',
+    trigger: 'runs shell commands to inspect the server they live on',
+  },
 };
 
 const SEED_THRESHOLD    = 5;

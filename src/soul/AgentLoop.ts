@@ -22,6 +22,11 @@ import {
   buildGoalFormationPrompt,
   buildRegistryActionNarrationPrompt,
   buildVentureResponsePrompt,
+  buildWebSearchPrompt,
+  buildCodeReadPrompt,
+  buildCodeWritePrompt,
+  buildAIConsultPrompt,
+  buildShellCommandPrompt,
 } from '../llm/prompts';
 import { getPool } from '../db/client';
 import { getRedis } from '../db/redisClient';
@@ -70,8 +75,9 @@ function sleep(ms: number): Promise<void> {
 // ─── LLM availability cache ───────────────────────────────────────────────────
 
 const LLM_RECHECK_INTERVAL = 5 * 60 * 1000;
-let llmAvailable    = false;
-let llmLastChecked  = 0;
+let llmAvailable      = false;
+let llmLastChecked    = 0;
+let contentFailStreak = 0;
 
 async function checkLLM(): Promise<boolean> {
   const now = Date.now();
@@ -99,6 +105,12 @@ export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: st
     registrySeeded = true;
     await seedRegistry(soul.id);
   }
+
+  // Stagger background tasks so souls don't all fire simultaneously
+  const jitter = slotIndex * 40_000;
+  if (!lastReflectionTime.has(soul.id)) lastReflectionTime.set(soul.id, Date.now() - REFLECTION_INTERVAL_MS + jitter);
+  if (!lastIdeologyTime.has(soul.id))   lastIdeologyTime.set(soul.id, Date.now() - IDEOLOGY_INTERVAL_MS + jitter);
+  if (!lastGoalTime.has(soul.id))       lastGoalTime.set(soul.id, Date.now() - GOAL_INTERVAL_MS + jitter);
 
   const usingLLM = await checkLLM();
   log(soul.name, `Agent loop started. LLM: ${usingLLM ? 'Ollama ✓' : 'hardcoded fallback'} | slot #${slotIndex}`);
@@ -211,12 +223,34 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
       generatedText = await generateLibraryWork(soul, quirkList, ActionType.CREATE_ART, neighbours);
     } else if (/browse_web/.test(label)) {
       generatedText = await generateLibraryWork(soul, quirkList, ActionType.BROWSE_WEB, neighbours);
+    } else if (/^search_web$/.test(label)) {
+      generatedText = await generateToolAction(soul, 'search_web', neighbours, action);
+    } else if (/^read_codebase$/.test(label)) {
+      generatedText = await generateToolAction(soul, 'read_codebase', neighbours, action);
+    } else if (/^write_code$/.test(label)) {
+      generatedText = await generateToolAction(soul, 'write_code', neighbours, action);
+    } else if (/^consult_ai$/.test(label)) {
+      generatedText = await generateToolAction(soul, 'consult_ai', neighbours, action);
+    } else if (/^run_command$/.test(label)) {
+      generatedText = await generateToolAction(soul, 'run_command', neighbours, action);
     } else {
       // All other actions: registry narration (includes novel auto-registered labels)
       const regAction = registryActions.find(r => r.label === label);
       const actionDesc = regAction?.description ?? action.description ?? label;
       generatedText = await generateRegistryActionText(soul, label, actionDesc, neighbours);
     }
+  }
+
+  // Track consecutive content-generation failures to detect a broken "online" state
+  if (llmOnline && generatedText === undefined) {
+    contentFailStreak++;
+    if (contentFailStreak >= 3) {
+      process.stderr.write(`[AgentLoop] ${soul.name}: content fail streak ${contentFailStreak} — invalidating LLM check cache\n`);
+      llmLastChecked = 0;
+      contentFailStreak = 0;
+    }
+  } else {
+    contentFailStreak = 0;
   }
 
   // 5. Execute (browser → simulation fallback)
@@ -424,7 +458,7 @@ async function interpretDirective(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.6 });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.6, model: soul.identity.llm_model });
   if (!raw) return null;
 
   try {
@@ -462,7 +496,7 @@ async function generateContent(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true, model: soul.identity.llm_model });
   if (!raw) return undefined;
 
   try {
@@ -492,7 +526,7 @@ async function generateSocialText(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, long: true, model: soul.identity.llm_model });
   if (!raw) return undefined;
 
   try {
@@ -519,7 +553,7 @@ async function runReflection(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true, model: soul.identity.llm_model });
   if (!raw) return;
 
   try {
@@ -557,7 +591,7 @@ async function runIdeology(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.95, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.95, long: true, model: soul.identity.llm_model });
   if (!raw) return;
 
   try {
@@ -593,7 +627,7 @@ async function generateLibraryWork(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true, model: soul.identity.llm_model });
   if (!raw) return undefined;
 
   try {
@@ -667,7 +701,7 @@ async function runGoalFormation(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true, model: soul.identity.llm_model });
   if (!raw) return;
 
   try {
@@ -718,7 +752,7 @@ async function generateRegistryActionText(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8 });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
   if (!raw) return undefined;
 
   try {
@@ -727,6 +761,65 @@ async function generateRegistryActionText(
   } catch {
     return undefined;
   }
+}
+
+// ─── Phase 4b: Tool action parameter generation ───────────────────────────────
+
+async function generateToolAction(
+  soul: Soul,
+  toolType: string,
+  neighbours: string[],
+  action: import('../types').Action,
+): Promise<string | undefined> {
+  const context = action.reasoning ?? action.description ?? `performing ${toolType}`;
+
+  let prompt: string;
+  let parseKey: string;
+
+  if (toolType === 'search_web') {
+    prompt    = buildWebSearchPrompt({ identity: soul.identity, vitals: soul.vitals, context, neighbours });
+    parseKey  = 'searchQuery';
+  } else if (toolType === 'read_codebase') {
+    prompt    = buildCodeReadPrompt({ identity: soul.identity, context, neighbours });
+    parseKey  = 'filePaths';
+  } else if (toolType === 'write_code') {
+    prompt    = buildCodeWritePrompt({ identity: soul.identity, context, neighbours });
+    parseKey  = 'filePath';
+  } else if (toolType === 'consult_ai') {
+    prompt    = buildAIConsultPrompt({ identity: soul.identity, context, neighbours });
+    parseKey  = 'question';
+  } else {
+    prompt    = buildShellCommandPrompt({ identity: soul.identity, context, neighbours });
+    parseKey  = 'command';
+  }
+
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    // Merge parsed params into action.payload for ToolRouter to consume
+    Object.assign(action.payload, parsed);
+
+    const value = parsed[parseKey];
+    if (toolType === 'search_web' && value) {
+      return `Searching the web for: "${value}"`;
+    } else if (toolType === 'read_codebase') {
+      const files = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+      return `Reading codebase: ${files}`;
+    } else if (toolType === 'write_code' && value) {
+      return `Writing code to ${value}: ${String(parsed['description'] ?? '')}`;
+    } else if (toolType === 'consult_ai' && value) {
+      return `Consulting Claude: "${String(value).substring(0, 100)}"`;
+    } else if (toolType === 'run_command' && value) {
+      return `Running command: ${value}`;
+    }
+  } catch {
+    process.stderr.write(`[AgentLoop] generateToolAction parse failed for ${toolType}: ${raw.substring(0, 120)}\n`);
+  }
+
+  return undefined;
 }
 
 // ─── Phase 5: Venture logic ───────────────────────────────────────────────────
@@ -832,7 +925,7 @@ async function handleVentureDirective(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8 });
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
   if (!raw) return;
 
   try {

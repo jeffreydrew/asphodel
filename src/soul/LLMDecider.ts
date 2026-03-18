@@ -59,7 +59,7 @@ export class LLMDecider {
 
     const raw = await ollama.chat(
       [{ role: 'user', content: prompt }],
-      { json: true, temperature: 0.75 },
+      { json: true, temperature: 0.75, model: identity.llm_model },
     );
 
     if (raw) {

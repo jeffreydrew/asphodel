@@ -16,12 +16,16 @@ rsync -avz \
   -e "ssh -i $SSH_KEY" \
   --exclude node_modules \
   --exclude mnt \
-  --exclude .env \
   --exclude .git \
   --exclude .claude \
   --exclude browser-contexts \
   --exclude '*.log' \
   . "$APP_SERVER:$APP_DIR/"
+
+echo "▶ Syncing .env..."
+rsync -avz \
+  -e "ssh -i $SSH_KEY" \
+  "$DIR/.env" "$APP_SERVER:$APP_DIR/.env"
 
 NVM_INIT='export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
 
