@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asphodel Tower</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+
+  <script>
+    // Port config — override with ?ws=3001&http=3000
+    const params = new URLSearchParams(location.search);
+    window.ASPHODEL_WS_PORT   = params.get('ws')   ?? 3001;
+    window.ASPHODEL_HTTP_PORT = params.get('http') ?? 3000;
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ── Three.js canvas ──────────────────────────────────────── -->
+  <div id="canvas-container"></div>
+
+  <!-- ── World Clock (top centre) ────────────────────────────── -->
+  <div class="panel" id="world-clock">
+    <div class="tick-label">ASPHODEL TOWER</div>
+    <div class="tick-value" id="clock-tick">— SOULS —</div>
+    <div class="real-time" id="clock-time">00:00:00</div>
+  </div>
+
+  <!-- ── Soul Cards (top right) ───────────────────────────────── -->
+  <div id="soul-cards"></div>
+
+  <!-- ── Floor Filter (left side) ────────────────────────────── -->
+  <div class="panel" id="floor-filter">
+    <div class="floor-filter-label">FLOORS</div>
+    <button class="floor-btn active" data-floor="-1">ALL</button>
+    <button class="floor-btn" data-floor="5">LIBRARY</button>
+    <button class="floor-btn" data-floor="4">BEDROOM</button>
+    <button class="floor-btn" data-floor="3">GYM</button>
+    <button class="floor-btn" data-floor="2">OFFICE</button>
+    <button class="floor-btn" data-floor="1">KITCHEN</button>
+    <button class="floor-btn" data-floor="0">LOBBY</button>
+    <div class="floor-drag-hint">drag furniture<br>to rearrange</div>
+  </div>
+
+  <!-- ── World Log (bottom left) ──────────────────────────────── -->
+  <div class="panel" id="world-log">
+    <div id="world-log-title">◈ WORLD LOG</div>
+    <div id="log-entries"></div>
+  </div>
+
+  <!-- ── Milestone Banner (centre flash) ──────────────────────── -->
+  <div id="milestone-banner"></div>
+
+  <!-- ── Archive Button ───────────────────────────────────────── -->
+  <button id="archive-btn" onclick="window.__openArchive?.()">◈ ARCHIVE</button>
+
+  <!-- ── Archive Panel (full overlay) ─────────────────────────── -->
+  <div id="archive-panel">
+    <div id="archive-header">
+      <span>◈ LIBRARY ARCHIVE</span>
+      <div id="archive-filters">
+        <select id="archive-type-filter">
+          <option value="">All types</option>
+          <option value="writing">Writing</option>
+          <option value="art">Art</option>
+          <option value="research">Research</option>
+        </select>
+        <select id="archive-soul-filter">
+          <option value="">All souls</option>
+        </select>
+        <button id="archive-refresh">↺</button>
+      </div>
+      <button id="archive-close">✕</button>
+    </div>
+    <div id="archive-body">
+      <div id="archive-list"></div>
+      <div id="archive-reader">
+        <div id="archive-reader-title">Select a work</div>
+        <div id="archive-reader-meta"></div>
+        <div id="archive-reader-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Chat Bar (bottom centre) ────────────────────────────── -->
+  <div id="chat-bar">
+    <select id="chat-soul-select">
+      <option value="">— soul —</option>
+    </select>
+    <input
+      type="text"
+      id="chat-input"
+      placeholder="Send a directive to this soul…"
+      autocomplete="off"
+    />
+    <button id="chat-send">Send</button>
+  </div>
+  <div id="chat-feedback"></div>
+
+  <!-- ── Soul Panel (right slide-in) ─────────────────────────── -->
+  <div id="soul-panel">
+    <button id="panel-close">✕ close</button>
+
+    <div class="panel-section">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <div class="soul-dot" id="panel-soul-dot" style="width:14px;height:14px;border-radius:50%"></div>
+        <div class="panel-name" id="panel-soul-name">—</div>
+      </div>
+      <div class="wallet-amount" id="panel-wallet">$0.00 abstract</div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Vitals</div>
+      <div class="vitals-grid" id="panel-vitals"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Quirks</div>
+      <div id="panel-quirks"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Last Reward</div>
+      <div id="panel-rewards"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { init } from '/js/world.js';
+    init();
+  </script>
+
+</body>
+</html>

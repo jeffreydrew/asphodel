@@ -1,0 +1,904 @@
+import * as THREE from 'three';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { onWorldUpdate, connect } from './api.js';
+import { initHUD, updateHUD, openSoulPanel, populateSoulSelect } from './hud.js';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const SOUL_COLORS = [0xff6b9d, 0xffd93d, 0x6bcb77, 0x4d96ff, 0xc77dff];
+
+const FLOOR_SPACING = 4.5;   // metres between floor surfaces
+const FLOOR_SIZE    = 16;    // floor slab width and depth
+const WALL_HEIGHT   = 3.8;   // interior wall height
+const KIT = '/models/furniture/kenney_furniture-kit/Models/GLTF%20format/';
+
+const FLOORS = [
+  { y: 0,                  label: 'LOBBY',   lightColor: 0xffddaa, lightIntensity: 80,  floorColor: 0x1e1e42, actions: ['idle','meet_soul','social_post'] },
+  { y: FLOOR_SPACING,      label: 'KITCHEN', lightColor: 0xfff4e8, lightIntensity: 90,  floorColor: 0x1a2e42, actions: ['eat'] },
+  { y: FLOOR_SPACING * 2,  label: 'OFFICE',  lightColor: 0xe8f0ff, lightIntensity: 100, floorColor: 0x14223a, actions: ['browse_jobs','submit_application','create_content'] },
+  { y: FLOOR_SPACING * 3,  label: 'GYM',     lightColor: 0xd4ffea, lightIntensity: 80,  floorColor: 0x162e26, actions: ['exercise'] },
+  { y: FLOOR_SPACING * 4,  label: 'BEDROOM', lightColor: 0xffccaa, lightIntensity: 50,  floorColor: 0x221238, actions: ['rest'] },
+  { y: FLOOR_SPACING * 5,  label: 'LIBRARY', lightColor: 0xffe8cc, lightIntensity: 65,  floorColor: 0x1a1208, actions: ['read_book','write_book','create_art','browse_web'] },
+];
+
+// ─── Scheduled Task Positions (by soul index 0-4) ────────────────────────────
+
+// Office: chairs in front of desks (desk row at z=-5.5, chairs face PI toward desk)
+const OFFICE_DESK_XZ    = [[-6.0,-4.0],[-3.0,-4.0],[0.0,-4.0],[3.0,-4.0],[6.0,-4.0]];
+// Gym: bench/mat positions
+const GYM_SPOT_XZ       = [[-5.5,-5.5],[-5.5,-2.5],[-5.5,0.5],[1.0,-2.5],[4.5,-4.5]];
+// Bedroom: in front of each bed
+const BED_XZ            = [[-5.5,-5.0],[5.5,-5.0],[-5.5,-0.5],[5.5,-0.5],[-5.5,3.0]];
+// Kitchen: bar stools + dining chairs
+const KITCHEN_SPOT_XZ   = [[1.5,-5.5],[3.0,-5.5],[4.5,-5.5],[1.5,1.5],[3.0,1.5]];
+
+// Task durations in ms (real-time; tune to taste)
+const TASK_MS = { office: 45_000, gym: 30_000, bedroom: 60_000, kitchen: 20_000, default: 25_000 };
+
+// ─── Scene State ──────────────────────────────────────────────────────────────
+
+let scene, camera, renderer, labelRenderer, controls, raycaster, mouse;
+let avatars = [];
+let worldData = null;
+let selectedId = null;
+
+const gltfLoader = new GLTFLoader();
+
+// ─── Entry Point ──────────────────────────────────────────────────────────────
+
+export function init() {
+  setupScene();
+  buildTower();
+  setupLights();
+  setupCamera();
+  setupRenderers();
+  setupControls();
+  loadFurniture();
+
+  raycaster = new THREE.Raycaster();
+  mouse     = new THREE.Vector2();
+
+  window.addEventListener('resize', onResize);
+  window.addEventListener('click',  onClick);
+
+  onWorldUpdate(handleUpdate);
+  connect();
+  initHUD();
+  animate();
+}
+
+// ─── Scene Setup ──────────────────────────────────────────────────────────────
+
+function setupScene() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05050e);
+  scene.fog = new THREE.FogExp2(0x05050e, 0.007);
+}
+
+function buildTower() {
+  const towerTop = FLOOR_SPACING * FLOORS.length + WALL_HEIGHT;
+
+  // ── Central spine ──────────────────────────────────────────
+  const spineGeo = new THREE.BoxGeometry(3.0, towerTop + 4, 3.0);
+  const spineMat = new THREE.MeshLambertMaterial({ color: 0x0c0c20 });
+  const spine    = new THREE.Mesh(spineGeo, spineMat);
+  spine.position.set(0, towerTop / 2, 0);
+  scene.add(spine);
+
+  const spineEdges = new THREE.EdgesGeometry(spineGeo);
+  const edgeMat    = new THREE.LineBasicMaterial({ color: 0x1a2a5a });
+  const spineLines = new THREE.LineSegments(spineEdges, edgeMat);
+  spineLines.position.copy(spine.position);
+  scene.add(spineLines);
+
+  // ── Floors ─────────────────────────────────────────────────
+  FLOORS.forEach((floor, i) => buildFloor(floor, i));
+
+  // ── Stairs (one staircase between every pair of floors) ────
+  for (let i = 0; i < FLOORS.length - 1; i++) {
+    buildStairs(FLOORS[i].y, FLOORS[i + 1].y);
+  }
+
+  // ── Ground plane ────────────────────────────────────────────
+  const groundGeo = new THREE.PlaneGeometry(100, 100);
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0x040410 });
+  const ground    = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.5;
+  scene.add(ground);
+
+  const grid = new THREE.GridHelper(100, 100, 0x0f0f28, 0x08081a);
+  grid.position.y = -0.48;
+  scene.add(grid);
+
+  // ── Roof ────────────────────────────────────────────────────
+  const roofGeo = new THREE.BoxGeometry(18, 0.4, 18);
+  const roofMat = new THREE.MeshLambertMaterial({ color: 0x0e0e22 });
+  const roof    = new THREE.Mesh(roofGeo, roofMat);
+  roof.position.set(0, towerTop, 0);
+  scene.add(roof);
+
+  // Antenna
+  const antGeo = new THREE.CylinderGeometry(0.05, 0.05, 5, 6);
+  const antMat = new THREE.MeshLambertMaterial({ color: 0x4a90d9 });
+  const ant    = new THREE.Mesh(antGeo, antMat);
+  ant.position.set(0, towerTop + 2.5, 0);
+  scene.add(ant);
+
+  const blinkGeo = new THREE.SphereGeometry(0.18, 8, 8);
+  const blinkMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+  const blink    = new THREE.Mesh(blinkGeo, blinkMat);
+  blink.position.set(0, towerTop + 5.1, 0);
+  blink.userData.isBlink = true;
+  scene.add(blink);
+}
+
+function buildFloor(floor, index) {
+  const half = FLOOR_SIZE / 2;
+
+  // ── Slab ────────────────────────────────────────────────────
+  const slabGeo = new THREE.BoxGeometry(FLOOR_SIZE, 0.28, FLOOR_SIZE);
+  const slabMat = new THREE.MeshLambertMaterial({ color: floor.floorColor });
+  const slab    = new THREE.Mesh(slabGeo, slabMat);
+  slab.position.set(0, floor.y - 0.14, 0);
+  scene.add(slab);
+
+  const edgesGeo = new THREE.EdgesGeometry(slabGeo);
+  const glowMat  = new THREE.LineBasicMaterial({ color: index === 0 ? 0x4a90d9 : 0x1e2e50 });
+  const edges    = new THREE.LineSegments(edgesGeo, glowMat);
+  edges.position.copy(slab.position);
+  scene.add(edges);
+
+  // ── Walls ────────────────────────────────────────────────────
+  buildFloorWalls(floor.y, index);
+
+  // ── Ceiling light fixture (visible glow panel) ──────────────
+  const fixGeo = new THREE.BoxGeometry(1.6, 0.1, 1.6);
+  const fixMat = new THREE.MeshBasicMaterial({ color: floor.lightColor });
+  const fix    = new THREE.Mesh(fixGeo, fixMat);
+  fix.position.set(0, floor.y + WALL_HEIGHT - 0.05, 0);
+  scene.add(fix);
+
+  // Corner accent lights (visible smaller panels)
+  for (const [cx, cz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
+    const accent = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.08, 0.4),
+      new THREE.MeshBasicMaterial({ color: floor.lightColor }),
+    );
+    accent.position.set(cx, floor.y + WALL_HEIGHT - 0.05, cz);
+    scene.add(accent);
+  }
+
+  // ── Interior lighting (high intensity for Three.js physical decay) ──────
+  const mainLight = new THREE.PointLight(floor.lightColor, floor.lightIntensity, 30, 1.5);
+  mainLight.position.set(0, floor.y + WALL_HEIGHT * 0.75, 0);
+  scene.add(mainLight);
+
+  // Four fill lights near corners to evenly illuminate the large floor
+  for (const [fx, fz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
+    const fill = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 0.4, 20, 1.5);
+    fill.position.set(fx, floor.y + WALL_HEIGHT * 0.5, fz);
+    scene.add(fill);
+  }
+
+  // ── Floor label ──────────────────────────────────────────────
+  const div = document.createElement('div');
+  div.className   = 'floor-label';
+  div.textContent = floor.label;
+  const label     = new CSS2DObject(div);
+  label.position.set(-half - 1.0, floor.y + 1.8, 0);
+  scene.add(label);
+}
+
+function buildFloorWalls(floorY, index) {
+  const half    = FLOOR_SIZE / 2;
+  const wallY   = floorY + WALL_HEIGHT / 2;
+
+  const wallColors = [0x14143a, 0x14243c, 0x10203a, 0x14282c, 0x1c1030, 0x201408];
+  const wallMat = new THREE.MeshLambertMaterial({
+    color:      wallColors[index] ?? 0x14143a,
+    transparent: true,
+    opacity:    0.50,
+    side:       THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const addWall = (w, h, d, x, y, z) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+  };
+
+  // Cutaway view: only keep North (z=-half) and West (x=-half) walls.
+  // South and East face the camera and are removed so the interior is always visible.
+
+  // North wall (z = -half): solid back wall
+  addWall(FLOOR_SIZE, WALL_HEIGHT, 0.2, 0, wallY, -half);
+
+  // West wall (x = -half): solid left wall
+  addWall(0.2, WALL_HEIGHT, FLOOR_SIZE, -half, wallY, 0);
+}
+
+// ─── Stairs ───────────────────────────────────────────────────────────────────
+// Builds a decorative staircase on the east side between two floor heights.
+
+function buildStairs(fromY, toY) {
+  const STEPS      = 8;
+  const stepRise   = (toY - fromY) / STEPS;  // height per step
+  const stepRun    = 0.65;                    // z depth per step
+  const stairX     = 6.8;                     // east side of tower
+  const stairW     = 1.4;                     // stair width (x direction)
+  const startZ     = 6.0;                     // south end of stair run
+
+  const stepMat = new THREE.MeshLambertMaterial({ color: 0x1e2040 });
+  const railMat = new THREE.MeshLambertMaterial({ color: 0x4a90d9 });
+
+  for (let i = 0; i < STEPS; i++) {
+    // Each step is a cumulative-height box (waterfall stair pattern)
+    const h  = stepRise * (i + 1);
+    const cz = startZ - stepRun * i - stepRun / 2;
+    const cy = fromY + h / 2;
+
+    const geo  = new THREE.BoxGeometry(stairW, h, stepRun);
+    const mesh = new THREE.Mesh(geo, stepMat);
+    mesh.position.set(stairX, cy, cz);
+    scene.add(mesh);
+  }
+
+  // Handrail (diagonal bar along the run)
+  const runDepth = stepRun * STEPS;
+  const railGeo  = new THREE.BoxGeometry(0.06, (toY - fromY) + 0.4, runDepth);
+  const railL    = new THREE.Mesh(railGeo, railMat);
+  railL.position.set(stairX - stairW / 2 - 0.03, fromY + (toY - fromY) / 2 + 0.2, startZ - runDepth / 2);
+  scene.add(railL);
+
+  const railR = railL.clone();
+  railR.position.x = stairX + stairW / 2 + 0.03;
+  scene.add(railR);
+}
+
+function setupLights() {
+  // Global ambient — keeps shadows from going pitch black
+  scene.add(new THREE.AmbientLight(0x303060, 2.5));
+
+  // Exterior moonlight
+  const moon = new THREE.DirectionalLight(0x8090c0, 1.2);
+  moon.position.set(-15, 40, -20);
+  scene.add(moon);
+
+  scene.add(new THREE.HemisphereLight(0x2030a0, 0x0a0820, 0.8));
+
+  // Blue accent at tower base
+  const baseGlow = new THREE.PointLight(0x2050ff, 40, 30, 1.5);
+  baseGlow.position.set(0, -0.2, 0);
+  scene.add(baseGlow);
+}
+
+function setupCamera() {
+  const aspect = window.innerWidth / window.innerHeight;
+  const d = 26;
+  camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, -200, 600);
+  camera.position.set(34, 30, 34);
+  camera.lookAt(0, 10, 0);
+}
+
+function setupRenderers() {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.domElement.style.cssText = 'position:absolute;top:0;pointer-events:none;';
+  document.getElementById('canvas-container').appendChild(labelRenderer.domElement);
+}
+
+function setupControls() {
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 10, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.minDistance   = 12;
+  controls.maxDistance   = 100;
+  controls.maxPolarAngle = Math.PI / 2.05;
+  controls.update();
+}
+
+// ─── Furniture ────────────────────────────────────────────────────────────────
+
+function glb(path, x, y, z, ry = 0, scale = 0.9) {
+  gltfLoader.load(path, (gltf) => {
+    const model = gltf.scene;
+    model.position.set(x, y, z);
+    model.rotation.y = ry;
+    model.scale.setScalar(scale);
+    model.traverse(child => {
+      if (child.isMesh && child.material) {
+        const m = child.material;
+        child.material = new THREE.MeshLambertMaterial({
+          color: m.color ?? 0xcccccc,
+          map:   m.map  ?? null,
+        });
+      }
+    });
+    scene.add(model);
+  }, undefined, () => {});
+}
+
+function loadFurniture() {
+  const k = KIT;
+
+  // ── LOBBY (floor y = 0) ────────────────────────────────────────────────
+  const L = FLOORS[0].y;
+  // Sofa lounge cluster (west side)
+  glb(`${k}loungeSofa.glb`,           -5.5,  L,  -4.5, Math.PI * 0.5);
+  glb(`${k}loungeSofaLong.glb`,       -5.5,  L,  -1.0, Math.PI * 0.5);
+  glb(`${k}loungeSofaCorner.glb`,     -5.5,  L,   2.5, Math.PI * 0.5);
+  glb(`${k}tableCoffee.glb`,          -4.0,  L,  -2.5, 0);
+  glb(`${k}tableCoffee.glb`,          -4.0,  L,   1.5, 0);
+  glb(`${k}rugRectangle.glb`,         -4.8,  L,  -2.5, Math.PI * 0.5);
+  glb(`${k}rugRectangle.glb`,         -4.8,  L,   1.5, Math.PI * 0.5);
+  glb(`${k}televisionModern.glb`,     -7.2,  L,  -3.5, Math.PI * 0.5);
+  glb(`${k}cabinetTelevision.glb`,    -7.2,  L,  -3.5, Math.PI * 0.5);
+  // Chair cluster (east side)
+  glb(`${k}loungeChair.glb`,           5.0,  L,  -5.5, Math.PI * 1.25);
+  glb(`${k}loungeChair.glb`,           6.5,  L,  -3.5, Math.PI * 1.0);
+  glb(`${k}loungeChairRelax.glb`,      6.5,  L,  -1.0, Math.PI * 1.0);
+  glb(`${k}tableRound.glb`,            5.5,  L,  -4.5, 0);
+  glb(`${k}rugRound.glb`,              5.5,  L,  -4.5, 0);
+  // Reception / entry
+  glb(`${k}benchCushion.glb`,          0.0,  L,  -7.2, Math.PI);
+  glb(`${k}benchCushion.glb`,          3.5,  L,  -7.2, Math.PI);
+  glb(`${k}benchCushion.glb`,         -3.5,  L,  -7.2, Math.PI);
+  // Accent
+  glb(`${k}pottedPlant.glb`,          -7.0,  L,  -7.0, 0);
+  glb(`${k}pottedPlant.glb`,           7.0,  L,  -7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  L,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,           7.0,  L,   7.0, 0);
+  glb(`${k}plantSmall1.glb`,          -3.0,  L,   7.0, 0);
+  glb(`${k}plantSmall2.glb`,           3.0,  L,   7.0, 0);
+  glb(`${k}lampSquareFloor.glb`,      -7.0,  L,  -1.0, 0);
+  glb(`${k}lampSquareFloor.glb`,       7.0,  L,   2.0, 0);
+  glb(`${k}coatRackStanding.glb`,      6.5,  L,   6.5, 0);
+  glb(`${k}speaker.glb`,              -7.2,  L,  -4.5, Math.PI * 0.5);
+  glb(`${k}rugSquare.glb`,             0.0,  L,   4.0, 0);
+
+  // ── KITCHEN (floor y = 4.5) ────────────────────────────────────────────
+  const Ki = FLOORS[1].y;
+  // Counter run (west wall)
+  glb(`${k}kitchenCabinet.glb`,       -7.0,  Ki,  -6.0, Math.PI * 0.5);
+  glb(`${k}kitchenCabinet.glb`,       -7.0,  Ki,  -4.5, Math.PI * 0.5);
+  glb(`${k}kitchenCabinet.glb`,       -7.0,  Ki,  -3.0, Math.PI * 0.5);
+  glb(`${k}kitchenFridge.glb`,        -7.0,  Ki,  -1.0, Math.PI * 0.5);
+  glb(`${k}kitchenStove.glb`,         -7.0,  Ki,   1.5, Math.PI * 0.5);
+  glb(`${k}hoodModern.glb`,           -7.0,  Ki + 1.5, 1.5, Math.PI * 0.5);
+  glb(`${k}kitchenSink.glb`,          -7.0,  Ki,   4.0, Math.PI * 0.5);
+  // Upper cabinets
+  glb(`${k}kitchenCabinetUpperDouble.glb`, -7.0, Ki + 1.55, -5.3, Math.PI * 0.5);
+  glb(`${k}kitchenCabinetUpperDouble.glb`, -7.0, Ki + 1.55, -3.0, Math.PI * 0.5);
+  glb(`${k}kitchenCabinetUpper.glb`,  -7.0,  Ki + 1.55,  4.0, Math.PI * 0.5);
+  // Counter appliances
+  glb(`${k}kitchenMicrowave.glb`,     -6.2,  Ki + 0.95, -6.0, Math.PI * 0.5);
+  glb(`${k}kitchenCoffeeMachine.glb`, -6.2,  Ki + 0.95, -4.5, Math.PI * 0.5);
+  glb(`${k}toaster.glb`,              -6.2,  Ki + 0.95, -3.0, Math.PI * 0.5);
+  glb(`${k}kitchenBlender.glb`,       -6.2,  Ki + 0.95, -1.5, Math.PI * 0.5);
+  // Breakfast bar (north)
+  glb(`${k}kitchenBarEnd.glb`,         0.0,  Ki,  -6.5, 0);
+  glb(`${k}kitchenBar.glb`,            1.5,  Ki,  -6.5, 0);
+  glb(`${k}kitchenBar.glb`,            3.0,  Ki,  -6.5, 0);
+  glb(`${k}kitchenBar.glb`,            4.5,  Ki,  -6.5, 0);
+  glb(`${k}stoolBar.glb`,              1.5,  Ki,  -5.5, 0);
+  glb(`${k}stoolBar.glb`,              3.0,  Ki,  -5.5, 0);
+  glb(`${k}stoolBar.glb`,              4.5,  Ki,  -5.5, 0);
+  // Dining table
+  glb(`${k}table.glb`,                 3.0,  Ki,   1.5, 0);
+  glb(`${k}tableCloth.glb`,            3.0,  Ki,   1.5, 0);
+  glb(`${k}chairDesk.glb`,             1.5,  Ki,   1.5, Math.PI * 0.5);
+  glb(`${k}chairDesk.glb`,             4.5,  Ki,   1.5, Math.PI * -0.5);
+  glb(`${k}chairDesk.glb`,             3.0,  Ki,   3.0, 0);
+  glb(`${k}chairDesk.glb`,             3.0,  Ki,   0.0, Math.PI);
+  glb(`${k}rugRectangle.glb`,          3.0,  Ki,   1.5, 0);
+  // Accent
+  glb(`${k}pottedPlant.glb`,           7.0,  Ki,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  Ki,   7.0, 0);
+  glb(`${k}lampRoundTable.glb`,        6.0,  Ki,   6.0, 0);
+
+  // ── OFFICE (floor y = 9.0) ─────────────────────────────────────────────
+  const O = FLOORS[2].y;
+  // Desk row (along north wall)
+  for (let i = 0; i < 5; i++) {
+    const dx = -6.0 + i * 3.0;
+    glb(`${k}desk.glb`,               dx,     O,     -5.5, 0);
+    glb(`${k}computerScreen.glb`,     dx,     O + 0.75, -5.5, 0);
+    glb(`${k}computerKeyboard.glb`,   dx + 0.4, O + 0.75, -4.8, 0);
+    glb(`${k}chairDesk.glb`,          dx,     O,     -4.0, Math.PI);
+  }
+  // Bookcase wall (east side)
+  glb(`${k}bookcaseOpen.glb`,          7.2,  O,  -4.5, Math.PI * -0.5);
+  glb(`${k}bookcaseOpen.glb`,          7.2,  O,  -2.5, Math.PI * -0.5);
+  glb(`${k}bookcaseClosed.glb`,        7.2,  O,  -0.5, Math.PI * -0.5);
+  glb(`${k}bookcaseClosedWide.glb`,    7.2,  O,   2.0, Math.PI * -0.5);
+  glb(`${k}books.glb`,                 7.2,  O + 1.2, -3.5, Math.PI * -0.5);
+  // Meeting / lounge area (south side)
+  glb(`${k}loungeSofa.glb`,            0.0,  O,   5.5, Math.PI);
+  glb(`${k}loungeChair.glb`,          -2.5,  O,   4.0, Math.PI * 1.25);
+  glb(`${k}loungeChair.glb`,           2.5,  O,   4.0, Math.PI * 0.75);
+  glb(`${k}tableCoffeeGlass.glb`,      0.0,  O,   3.5, 0);
+  glb(`${k}rugRectangle.glb`,          0.0,  O,   4.8, 0);
+  // Accent
+  glb(`${k}lampSquareFloor.glb`,       7.0,  O,   6.5, 0);
+  glb(`${k}lampSquareFloor.glb`,      -7.0,  O,   6.5, 0);
+  glb(`${k}speaker.glb`,             -7.2,  O,  -6.5, Math.PI * 0.5);
+  glb(`${k}trashcan.glb`,            -6.0,  O,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,           7.0,  O,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  O,   7.0, 0);
+  glb(`${k}laptop.glb`,              -6.0,  O + 0.75, -5.5, Math.PI, 0.7);
+
+  // ── GYM (floor y = 13.5) ───────────────────────────────────────────────
+  const G = FLOORS[3].y;
+  // Weight benches
+  glb(`${k}benchCushionLow.glb`,      -5.5,  G,  -5.5, 0);
+  glb(`${k}benchCushionLow.glb`,      -5.5,  G,  -2.5, 0);
+  glb(`${k}benchCushionLow.glb`,      -5.5,  G,   0.5, 0);
+  glb(`${k}benchCushionLow.glb`,      -5.5,  G,   3.5, 0);
+  // Mat areas
+  glb(`${k}rugRectangle.glb`,          1.0,  G,  -2.5, 0);
+  glb(`${k}rugRectangle.glb`,          1.0,  G,   2.0, 0);
+  glb(`${k}rugRectangle.glb`,          4.5,  G,  -0.5, Math.PI * 0.5);
+  glb(`${k}rugRectangle.glb`,          4.5,  G,  -4.5, Math.PI * 0.5);
+  // Gear corner
+  glb(`${k}stoolBar.glb`,              6.5,  G,  -5.5, 0);
+  glb(`${k}stoolBar.glb`,              6.5,  G,  -3.5, 0);
+  glb(`${k}sideTable.glb`,             6.5,  G,  -4.5, 0);
+  glb(`${k}radio.glb`,               -7.2,  G,   3.0, Math.PI * 0.5);
+  // Entry benches
+  glb(`${k}benchCushion.glb`,          0.0,  G,  -7.2, 0);
+  glb(`${k}benchCushion.glb`,          3.5,  G,  -7.2, 0);
+  // Accent
+  glb(`${k}lampSquareFloor.glb`,       7.0,  G,  -7.0, 0);
+  glb(`${k}lampSquareFloor.glb`,      -7.0,  G,  -7.0, 0);
+  glb(`${k}pottedPlant.glb`,           7.0,  G,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  G,   7.0, 0);
+  glb(`${k}trashcan.glb`,             -6.0,  G,   7.0, 0);
+
+  // ── BEDROOM (floor y = 18.0) ───────────────────────────────────────────
+  const Be = FLOORS[4].y;
+  // Beds (two doubles on walls, singles in between)
+  glb(`${k}bedDouble.glb`,            -5.5,  Be,  -5.0, 0);
+  glb(`${k}bedDouble.glb`,             5.5,  Be,  -5.0, Math.PI);
+  glb(`${k}bedSingle.glb`,            -5.5,  Be,  -0.5, 0);
+  glb(`${k}bedSingle.glb`,             5.5,  Be,  -0.5, Math.PI);
+  glb(`${k}bedSingle.glb`,            -5.5,  Be,   3.0, 0);
+  // Bedside storage
+  glb(`${k}cabinetBed.glb`,           -4.0,  Be,  -6.2, 0);
+  glb(`${k}cabinetBed.glb`,            4.0,  Be,  -6.2, Math.PI);
+  glb(`${k}cabinetBedDrawerTable.glb`,-4.0,  Be,   1.2, 0);
+  // Lamps
+  glb(`${k}lampRoundTable.glb`,       -3.8,  Be + 0.6, -6.2, 0);
+  glb(`${k}lampRoundTable.glb`,        3.8,  Be + 0.6, -6.2, 0);
+  glb(`${k}lampRoundFloor.glb`,       -7.0,  Be,   5.0, 0);
+  glb(`${k}lampRoundFloor.glb`,        7.0,  Be,   5.0, 0);
+  // Storage / decor
+  glb(`${k}bookcaseClosedWide.glb`,    7.2,  Be,   4.0, Math.PI * -0.5);
+  glb(`${k}sideTableDrawers.glb`,      7.2,  Be,  -6.5, Math.PI * -0.5);
+  glb(`${k}sideTableDrawers.glb`,     -7.2,  Be,   5.0, Math.PI * 0.5);
+  glb(`${k}coatRack.glb`,             -7.0,  Be,  -6.5, 0);
+  // Rugs
+  glb(`${k}rugRounded.glb`,           -5.5,  Be,  -5.0, 0);
+  glb(`${k}rugRounded.glb`,            5.5,  Be,  -5.0, 0);
+  glb(`${k}rugRectangle.glb`,          0.0,  Be,   3.5, 0);
+  // Pillows & plants
+  glb(`${k}pillow.glb`,               -5.5,  Be + 0.5, -5.8, 0);
+  glb(`${k}pillow.glb`,                5.5,  Be + 0.5, -5.8, Math.PI);
+  glb(`${k}pillowLong.glb`,           -5.5,  Be + 0.5, -4.2, 0);
+  glb(`${k}pottedPlant.glb`,           7.0,  Be,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  Be,   7.0, 0);
+  glb(`${k}plantSmall1.glb`,          -5.5,  Be,   5.5, 0);
+  glb(`${k}plantSmall2.glb`,           5.5,  Be,   5.5, 0);
+
+  // ── LIBRARY (floor y = 22.5) ───────────────────────────────────────────
+  const Li = FLOORS[5].y;
+
+  // Archive wall (east): floor-to-ceiling bookcases
+  glb(`${k}bookcaseOpen.glb`,          7.2,  Li,  -6.0, Math.PI * -0.5);
+  glb(`${k}bookcaseOpen.glb`,          7.2,  Li,  -4.0, Math.PI * -0.5);
+  glb(`${k}bookcaseClosed.glb`,        7.2,  Li,  -2.0, Math.PI * -0.5);
+  glb(`${k}bookcaseClosedWide.glb`,    7.2,  Li,   0.5, Math.PI * -0.5);
+  glb(`${k}bookcaseOpen.glb`,          7.2,  Li,   2.8, Math.PI * -0.5);
+  glb(`${k}bookcaseClosed.glb`,        7.2,  Li,   4.5, Math.PI * -0.5);
+  glb(`${k}books.glb`,                 7.2,  Li + 1.2, -5.0, Math.PI * -0.5);
+  glb(`${k}books.glb`,                 7.2,  Li + 1.2, -2.0, Math.PI * -0.5);
+  glb(`${k}books.glb`,                 7.2,  Li + 1.2,  1.5, Math.PI * -0.5);
+
+  // Reading nook (south-west): armchairs + small tables
+  glb(`${k}loungeChairRelax.glb`,     -6.5,  Li,   5.0, Math.PI * 0.5);
+  glb(`${k}loungeChairRelax.glb`,     -5.0,  Li,   5.5, Math.PI * 0.75);
+  glb(`${k}loungeChair.glb`,          -6.5,  Li,   2.5, Math.PI * 0.5);
+  glb(`${k}tableCoffee.glb`,          -5.0,  Li,   4.0, 0);
+  glb(`${k}rugRound.glb`,             -5.5,  Li,   4.2, 0);
+  glb(`${k}lampRoundFloor.glb`,       -7.0,  Li,   6.5, 0);
+  glb(`${k}lampRoundTable.glb`,       -4.5,  Li + 0.45,  5.5, 0);
+
+  // Writing desks (north wall — west side): desks with lamps
+  glb(`${k}desk.glb`,                 -6.0,  Li,  -5.5, 0);
+  glb(`${k}desk.glb`,                 -3.5,  Li,  -5.5, 0);
+  glb(`${k}desk.glb`,                 -1.0,  Li,  -5.5, 0);
+  glb(`${k}chairDesk.glb`,            -6.0,  Li,  -4.0, Math.PI);
+  glb(`${k}chairDesk.glb`,            -3.5,  Li,  -4.0, Math.PI);
+  glb(`${k}chairDesk.glb`,            -1.0,  Li,  -4.0, Math.PI);
+  glb(`${k}lampRoundTable.glb`,       -6.0,  Li + 0.75, -5.8, 0);
+  glb(`${k}lampRoundTable.glb`,       -3.5,  Li + 0.75, -5.8, 0);
+  glb(`${k}lampRoundTable.glb`,       -1.0,  Li + 0.75, -5.8, 0);
+  glb(`${k}rugRectangle.glb`,         -3.5,  Li,  -4.8, 0);
+
+  // Art station (south-east): open tables for creating
+  glb(`${k}table.glb`,                 3.5,  Li,   5.0, 0);
+  glb(`${k}tableCloth.glb`,            3.5,  Li,   5.0, 0);
+  glb(`${k}chairDesk.glb`,             2.0,  Li,   5.0, Math.PI * 0.5);
+  glb(`${k}chairDesk.glb`,             5.0,  Li,   5.0, Math.PI * -0.5);
+  glb(`${k}table.glb`,                 3.5,  Li,   2.5, 0);
+  glb(`${k}chairDesk.glb`,             2.0,  Li,   2.5, Math.PI * 0.5);
+  glb(`${k}rugRectangle.glb`,          3.5,  Li,   4.0, Math.PI * 0.5);
+  glb(`${k}lampSquareFloor.glb`,       6.5,  Li,   6.5, 0);
+
+  // Web research terminal (centre-east): one computer station
+  glb(`${k}desk.glb`,                  2.5,  Li,  -5.5, 0);
+  glb(`${k}computerScreen.glb`,        2.5,  Li + 0.75, -5.5, 0);
+  glb(`${k}computerKeyboard.glb`,      2.9,  Li + 0.75, -4.8, 0);
+  glb(`${k}chairDesk.glb`,             2.5,  Li,  -4.0, Math.PI);
+
+  // Central display table (mid-floor): large round table with books
+  glb(`${k}tableRound.glb`,            0.0,  Li,   0.5, 0);
+  glb(`${k}books.glb`,                 0.0,  Li + 0.75,  0.5, 0);
+  glb(`${k}rugRound.glb`,              0.0,  Li,   0.5, 0);
+  glb(`${k}chairDesk.glb`,            -1.5,  Li,   0.5, Math.PI * 0.5);
+  glb(`${k}chairDesk.glb`,             1.5,  Li,   0.5, Math.PI * -0.5);
+
+  // Accent — plants, bookcase on west wall
+  glb(`${k}bookcaseClosedWide.glb`,   -7.2,  Li,  -5.5, Math.PI * 0.5);
+  glb(`${k}bookcaseOpen.glb`,         -7.2,  Li,  -3.0, Math.PI * 0.5);
+  glb(`${k}books.glb`,                -7.2,  Li + 1.2, -4.0, Math.PI * 0.5);
+  glb(`${k}pottedPlant.glb`,           7.0,  Li,   7.0, 0);
+  glb(`${k}pottedPlant.glb`,          -7.0,  Li,   7.0, 0);
+  glb(`${k}plantSmall1.glb`,          -2.5,  Li,   7.0, 0);
+  glb(`${k}plantSmall2.glb`,           1.5,  Li,   7.0, 0);
+  glb(`${k}lampSquareFloor.glb`,      -7.0,  Li,   2.0, 0);
+  glb(`${k}speaker.glb`,              -7.2,  Li,   6.5, Math.PI * 0.5);
+  glb(`${k}sideTable.glb`,             5.5,  Li,  -6.5, 0);
+  glb(`${k}lampRoundTable.glb`,        5.5,  Li + 0.45, -6.5, 0);
+}
+
+// ─── Soul Avatars ─────────────────────────────────────────────────────────────
+
+function randomWanderPoint(floorY) {
+  let x, z;
+  do {
+    x = (Math.random() - 0.5) * 13;  // ±6.5
+    z = (Math.random() - 0.5) * 13;
+  } while (Math.abs(x) < 2.6 && Math.abs(z) < 2.6);  // avoid spine
+  return new THREE.Vector3(x, floorY, z);  // group sits ON the floor surface
+}
+
+class SoulAvatar {
+  constructor(soul, index) {
+    this.id           = soul.id;
+    this.name         = soul.name;
+    this.index        = index;
+    this.color        = SOUL_COLORS[index] ?? 0xffffff;
+    this.floorY       = 0;
+
+    // State machine: WANDER | WALKING_TO_TASK | DOING_TASK
+    this.state        = 'WANDER';
+    this.wanderTarget = randomWanderPoint(0);
+    this.wanderTimer  = Math.random() * 4000;
+    this.wanderDelay  = 3000 + Math.random() * 5000;
+    this.taskTarget   = null;
+    this.taskDuration = 0;
+    this.taskTimer    = 0;
+    this.isMoving     = false;
+
+    this.group = new THREE.Group();
+    scene.add(this.group);
+
+    const mat = new THREE.MeshLambertMaterial({
+      color:    this.color,
+      emissive: new THREE.Color(this.color).multiplyScalar(0.1),
+    });
+
+    const LEG_H   = 0.28;
+    const TORSO_H = 0.36;
+    const HEAD_R  = 0.13;
+
+    const legMat = new THREE.MeshLambertMaterial({
+      color: new THREE.Color(this.color).multiplyScalar(0.55),
+    });
+    this.legL = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.038, LEG_H, 6), legMat);
+    this.legR = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.038, LEG_H, 6), legMat);
+    this.legL.position.set(-0.062, LEG_H / 2, 0);
+    this.legR.position.set( 0.062, LEG_H / 2, 0);
+    this.group.add(this.legL, this.legR);
+
+    this.torso = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.13, TORSO_H, 7), mat);
+    this.torso.position.y = LEG_H + TORSO_H / 2;
+    this.torso.userData.soulId = soul.id;
+    this.group.add(this.torso);
+
+    this.head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 8, 7), mat);
+    this.head.position.y = LEG_H + TORSO_H + HEAD_R;
+    this.head.userData.soulId = soul.id;
+    this.group.add(this.head);
+
+    this._torsoY = this.torso.position.y;
+    this._headY  = this.head.position.y;
+
+    // Soul-coloured ring (visible when wandering)
+    const ringMat = new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.45 });
+    this.ring = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.025, 6, 20), ringMat);
+    this.ring.rotation.x = Math.PI / 2;
+    this.ring.position.y = 0.01;
+    this.group.add(this.ring);
+
+    // Green pulsing task ring (visible only when DOING_TASK)
+    const taskRingMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0 });
+    this.taskRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.035, 6, 24), taskRingMat);
+    this.taskRing.rotation.x = Math.PI / 2;
+    this.taskRing.position.y = 0.01;
+    this.taskRing.visible = false;
+    this.group.add(this.taskRing);
+
+    // Name label
+    const labelDiv = document.createElement('div');
+    labelDiv.className   = 'soul-label';
+    labelDiv.textContent = soul.name.split(' ')[0];
+    labelDiv.id          = `lbl-${soul.id}`;
+    this.label = new CSS2DObject(labelDiv);
+    this.label.position.y = LEG_H + TORSO_H + HEAD_R * 2 + 0.10;
+    this.group.add(this.label);
+
+    this.body = this.torso;
+    this.group.position.copy(this.wanderTarget);
+  }
+
+  setFloor(action) {
+    const hour = new Date().getHours();
+    const isWorkHours = hour >= 9 && hour < 17;
+
+    // Determine target floor (9–17: everyone in OFFICE)
+    const targetFloor = isWorkHours
+      ? FLOORS.find(f => f.label === 'OFFICE')
+      : (FLOORS.find(f => f.actions.includes(action)) ?? FLOORS[0]);
+
+    const newFloorY = targetFloor.y;
+
+    // Floor changed — snap Y and reset to WANDER
+    if (Math.abs(newFloorY - this.floorY) > 0.1) {
+      this.floorY = newFloorY;
+      this.group.position.y = newFloorY;
+      this.state = 'WANDER';
+      this.wanderTarget = randomWanderPoint(newFloorY);
+      this.taskRing.visible = false;
+      this.ring.visible     = true;
+    }
+
+    // Only assign a new task if currently wandering (never interrupt an active task)
+    if (this.state !== 'WANDER') return;
+
+    const label = targetFloor.label;
+    let xz  = null;
+    let dur = TASK_MS.default;
+
+    if (isWorkHours && label === 'OFFICE') {
+      xz  = OFFICE_DESK_XZ[this.index] ?? OFFICE_DESK_XZ[0];
+      dur = TASK_MS.office;
+    } else if (label === 'GYM') {
+      xz  = GYM_SPOT_XZ[this.index % GYM_SPOT_XZ.length];
+      dur = TASK_MS.gym;
+    } else if (label === 'BEDROOM') {
+      xz  = BED_XZ[this.index % BED_XZ.length];
+      dur = TASK_MS.bedroom;
+    } else if (label === 'KITCHEN') {
+      xz  = KITCHEN_SPOT_XZ[this.index % KITCHEN_SPOT_XZ.length];
+      dur = TASK_MS.kitchen;
+    }
+    // LOBBY / LIBRARY: free wander, no committed task
+
+    if (xz) {
+      this.taskTarget   = new THREE.Vector3(xz[0], this.floorY, xz[1]);
+      this.taskDuration = dur;
+      this.taskTimer    = 0;
+      this.state        = 'WALKING_TO_TASK';
+    }
+  }
+
+  update(delta, ts) {
+    const WALK_SPEED = 1.8; // units/second
+
+    if (this.state === 'WANDER') {
+      const to   = new THREE.Vector3().subVectors(this.wanderTarget, this.group.position);
+      to.y       = 0;
+      const dist = to.length();
+
+      if (dist < 0.15) {
+        this.isMoving    = false;
+        this.wanderTimer += delta * 1000;
+        if (this.wanderTimer >= this.wanderDelay) {
+          this.wanderTarget = randomWanderPoint(this.floorY);
+          this.wanderTimer  = 0;
+          this.wanderDelay  = 3000 + Math.random() * 5000;
+        }
+      } else {
+        this.isMoving = true;
+        this.group.position.addScaledVector(to.normalize(), Math.min(WALK_SPEED * delta, dist));
+      }
+      this.group.position.y = this.floorY;
+
+    } else if (this.state === 'WALKING_TO_TASK') {
+      const to   = new THREE.Vector3().subVectors(this.taskTarget, this.group.position);
+      to.y       = 0;
+      const dist = to.length();
+
+      if (dist < 0.15) {
+        this.group.position.set(this.taskTarget.x, this.floorY, this.taskTarget.z);
+        this.state         = 'DOING_TASK';
+        this.taskTimer     = 0;
+        this.isMoving      = false;
+        this.taskRing.visible = true;
+        this.ring.visible     = false;
+      } else {
+        this.isMoving = true;
+        this.group.position.addScaledVector(to.normalize(), Math.min(WALK_SPEED * delta, dist));
+        this.group.position.y = this.floorY;
+      }
+
+    } else if (this.state === 'DOING_TASK') {
+      this.isMoving   = false;
+      this.taskTimer += delta * 1000;
+
+      // Pulse the green ring
+      this.taskRing.material.opacity = 0.25 + 0.55 * (0.5 + 0.5 * Math.sin(ts * 0.004));
+
+      if (this.taskTimer >= this.taskDuration) {
+        this.state            = 'WANDER';
+        this.taskRing.visible = false;
+        this.ring.visible     = true;
+        this.wanderTarget     = randomWanderPoint(this.floorY);
+        this.wanderTimer      = 0;
+        this.wanderDelay      = 8000 + Math.random() * 10000; // longer free wander after task
+      }
+    }
+
+    // Face direction of travel
+    if (this.isMoving) {
+      const tgt = (this.state === 'WALKING_TO_TASK') ? this.taskTarget : this.wanderTarget;
+      const dx  = tgt.x - this.group.position.x;
+      const dz  = tgt.z - this.group.position.z;
+      this.group.rotation.y += (Math.atan2(dx, dz) - this.group.rotation.y) * 0.10;
+    }
+
+    // Procedural body animation
+    if (this.isMoving) {
+      const walk = ts * 0.006;
+      this.torso.position.y = this._torsoY + Math.abs(Math.sin(walk)) * 0.022;
+      this.head.position.y  = this._headY  + Math.abs(Math.sin(walk)) * 0.022;
+      this.legL.rotation.x  =  Math.sin(walk) * 0.55;
+      this.legR.rotation.x  = -Math.sin(walk) * 0.55;
+      this.group.rotation.x = 0.05;
+    } else {
+      const breathe = Math.sin(ts * 0.0014 + this.index * 1.5) * 0.007;
+      this.torso.position.y = this._torsoY + breathe;
+      this.head.position.y  = this._headY  + breathe;
+      this.legL.rotation.x  = 0;
+      this.legR.rotation.x  = 0;
+      this.group.rotation.x = 0;
+    }
+  }
+
+  setSelected(selected) {
+    const div = document.getElementById(`lbl-${this.id}`);
+    if (div) div.className = `soul-label${selected ? ' selected' : ''}`;
+    if (this.torso?.material?.emissive) {
+      this.torso.material.emissive.setScalar(selected ? 0.3 : 0.1);
+      this.head.material.emissive.setScalar(selected ? 0.3 : 0.1);
+    }
+  }
+
+  pulse() {
+    const orig = this.torso?.material?.color?.clone();
+    if (!orig) return;
+    this.torso.material.color.set(0xffffff);
+    this.head.material.color.set(0xffffff);
+    setTimeout(() => {
+      this.torso?.material?.color?.copy(orig);
+      this.head?.material?.color?.copy(orig);
+    }, 300);
+  }
+}
+
+// ─── World Update Handler ─────────────────────────────────────────────────────
+
+let prevLogIds = new Set();
+
+function handleUpdate(data) {
+  worldData = data;
+
+  data.souls.forEach((soul, i) => {
+    if (!avatars[i]) avatars[i] = new SoulAvatar(soul, i);
+    avatars[i].setFloor(soul.last_action ?? 'idle');
+
+    const hasSig = data.recent_log.some(e =>
+      e.soul_id === soul.id && e.significance === 'SIGNIFICANT' && !prevLogIds.has(e.id),
+    );
+    if (hasSig) avatars[i].pulse();
+  });
+
+  data.recent_log.forEach(e => prevLogIds.add(e.id));
+  if (prevLogIds.size > 200) prevLogIds = new Set([...prevLogIds].slice(-100));
+
+  populateSoulSelect(data.souls);
+  updateHUD(data);
+}
+
+// ─── Interaction ──────────────────────────────────────────────────────────────
+
+function onClick(event) {
+  mouse.set(
+    (event.clientX / window.innerWidth)  * 2 - 1,
+    -(event.clientY / window.innerHeight) * 2 + 1,
+  );
+  raycaster.setFromCamera(mouse, camera);
+
+  // Hit-test torso + head of each avatar
+  const meshes = avatars.filter(Boolean).flatMap(a => [a.torso, a.head].filter(Boolean));
+
+  const hits = raycaster.intersectObjects(meshes);
+  if (hits.length > 0) {
+    let obj = hits[0].object;
+    let soulId = null;
+    while (obj && !soulId) {
+      soulId = obj.userData.soulId;
+      obj = obj.parent;
+    }
+    if (soulId) {
+      selectedId = soulId;
+      avatars.forEach(a => a?.setSelected(a.id === soulId));
+      openSoulPanel(soulId);
+    }
+  }
+}
+
+// ─── Animation Loop ───────────────────────────────────────────────────────────
+
+let lastTime = 0;
+
+function animate(ts = 0) {
+  requestAnimationFrame(animate);
+  const delta = Math.min((ts - lastTime) / 1000, 0.1);
+  lastTime = ts;
+
+  controls.update();
+  avatars.forEach(a => a?.update(delta, ts));
+
+  scene.traverse(obj => {
+    if (obj.userData.isBlink) {
+      obj.material.opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(ts * 0.003));
+      obj.material.transparent = true;
+    }
+  });
+
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+function onResize() {
+  const aspect = window.innerWidth / window.innerHeight;
+  const d      = Math.abs(camera.top);
+  camera.left  = -d * aspect;
+  camera.right =  d * aspect;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  controls.update();
+}
