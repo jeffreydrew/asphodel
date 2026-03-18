@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db/client';
+import { getPool } from '../db/pgClient';
 import { stripeAdapter } from '../integrations/StripeConnectAdapter';
 import type {
   SoulRecord,
@@ -14,14 +14,15 @@ import type {
   DirectiveTask,
 } from '../types';
 
+// pg returns JSONB as JS objects and BOOLEAN as JS boolean — no manual parsing needed
 interface SoulDbRow {
   id: string;
   name: string;
   email: string;
-  identity: string;
-  vitals: string;
-  reward_weights: string;
-  is_active: number;
+  identity: SoulIdentity;
+  vitals: SoulVitals;
+  reward_weights: RewardWeights;
+  is_active: boolean;
   created_at: number;
 }
 
@@ -35,10 +36,11 @@ export class Soul {
 
   private _vitals: SoulVitals;
   private _is_active: boolean;
-  private _last_action: ActionType | null = null;
+  private _last_action: ActionType | string | null = null;
   private _last_reward: RewardComponents | null = null;
   private _tick = 0;
   private _active_task: DirectiveTask | null = null;
+  private _action_end_time = 0;
 
   constructor(record: SoulRecord) {
     this.id             = record.id;
@@ -51,136 +53,146 @@ export class Soul {
     this._is_active     = record.is_active;
   }
 
-  static load(soulId: string): Soul {
-    const row = getDb()
-      .prepare('SELECT * FROM souls WHERE id = ?')
-      .get(soulId) as SoulDbRow | undefined;
-
+  static async load(soulId: string): Promise<Soul> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM souls WHERE id = $1',
+      [soulId],
+    );
+    const row = rows[0] as SoulDbRow | undefined;
     if (!row) throw new Error(`Soul ${soulId} not found`);
 
-    const record: SoulRecord = {
+    return new Soul({
       id:             row.id,
       name:           row.name,
       email:          row.email,
-      identity:       JSON.parse(row.identity) as SoulIdentity,
-      vitals:         JSON.parse(row.vitals) as SoulVitals,
-      reward_weights: JSON.parse(row.reward_weights) as RewardWeights,
-      is_active:      row.is_active === 1,
+      identity:       row.identity,
+      vitals:         row.vitals,
+      reward_weights: row.reward_weights,
+      is_active:      row.is_active,
       created_at:     row.created_at,
-    };
-
-    return new Soul(record);
+    });
   }
 
-  static loadAll(): Soul[] {
-    const rows = getDb()
-      .prepare('SELECT * FROM souls WHERE is_active = 1')
-      .all() as SoulDbRow[];
+  static async loadAll(): Promise<Soul[]> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM souls WHERE is_active = TRUE',
+    );
 
-    return rows.map(row => {
-      const record: SoulRecord = {
-        id:             row.id,
-        name:           row.name,
-        email:          row.email,
-        identity:       JSON.parse(row.identity) as SoulIdentity,
-        vitals:         JSON.parse(row.vitals) as SoulVitals,
-        reward_weights: JSON.parse(row.reward_weights) as RewardWeights,
-        is_active:      row.is_active === 1,
-        created_at:     row.created_at,
-      };
-      return new Soul(record);
-    });
+    return (rows as SoulDbRow[]).map(row => new Soul({
+      id:             row.id,
+      name:           row.name,
+      email:          row.email,
+      identity:       row.identity,
+      vitals:         row.vitals,
+      reward_weights: row.reward_weights,
+      is_active:      row.is_active,
+      created_at:     row.created_at,
+    }));
   }
 
   get vitals(): SoulVitals                      { return this._vitals; }
   get is_active(): boolean                       { return this._is_active; }
   get tick(): number                             { return this._tick; }
   get last_reward(): RewardComponents | null     { return this._last_reward; }
-  get last_action(): ActionType | null           { return this._last_action; }
+  get last_action(): ActionType | string | null  { return this._last_action; }
   get active_task(): DirectiveTask | null        { return this._active_task; }
+  get actionEndTime(): number                    { return this._action_end_time; }
+
+  setActionEndTime(ms: number): void { this._action_end_time = ms; }
 
   setActiveTask(task: DirectiveTask | null): void {
     this._active_task = task;
   }
 
-  advanceTask(actionType: ActionType): boolean {
+  advanceTask(actionType: ActionType | string): boolean {
     if (!this._active_task) return false;
-    if (!this._active_task.relevant_actions.includes(actionType)) return false;
+    if (!(this._active_task.relevant_actions as string[]).includes(actionType)) return false;
     this._active_task.steps_completed += 1;
     return this._active_task.steps_completed >= this._active_task.max_steps;
   }
 
-  recentActions(limit = 10): ActionType[] {
-    const rows = getDb()
-      .prepare('SELECT action_that_caused FROM reward_history WHERE soul_id = ? ORDER BY tick DESC LIMIT ?')
-      .all(this.id, limit) as Array<{ action_that_caused: ActionType }>;
-    return rows.map(r => r.action_that_caused).reverse();
+  async recentActions(limit = 10): Promise<(ActionType | string)[]> {
+    const { rows } = await getPool().query(
+      'SELECT action_that_caused FROM reward_history WHERE soul_id = $1 ORDER BY tick DESC LIMIT $2',
+      [this.id, limit],
+    );
+    return (rows as Array<{ action_that_caused: ActionType | string }>)
+      .map(r => r.action_that_caused)
+      .reverse();
   }
 
-  recentRewardAvg(limit = 10): number {
-    const rows = getDb()
-      .prepare('SELECT r_total FROM reward_history WHERE soul_id = ? ORDER BY tick DESC LIMIT ?')
-      .all(this.id, limit) as Array<{ r_total: number }>;
+  async recentRewardAvg(limit = 10): Promise<number> {
+    const { rows } = await getPool().query(
+      'SELECT r_total FROM reward_history WHERE soul_id = $1 ORDER BY tick DESC LIMIT $2',
+      [this.id, limit],
+    );
     if (!rows.length) return 0;
-    return rows.reduce((s, r) => s + r.r_total, 0) / rows.length;
+    return (rows as Array<{ r_total: number }>).reduce((s, r) => s + r.r_total, 0) / rows.length;
   }
 
-  observe(): { vitals: SoulVitals; wallet: WalletRow; quirks: QuirkRecord[] } {
+  async observe(): Promise<{ vitals: SoulVitals; wallet: WalletRow; quirks: QuirkRecord[] }> {
     return {
       vitals:  this._vitals,
-      wallet:  this.loadWallet(),
-      quirks:  this.loadQuirks(),
+      wallet:  await this.loadWallet(),
+      quirks:  await this.loadQuirks(),
     };
   }
 
-  updateVitals(vitals: SoulVitals): void {
+  async updateVitals(vitals: SoulVitals): Promise<void> {
     this._vitals = vitals;
-    getDb()
-      .prepare('UPDATE souls SET vitals = ? WHERE id = ?')
-      .run(JSON.stringify(vitals), this.id);
+    await getPool().query(
+      'UPDATE souls SET vitals = $1 WHERE id = $2',
+      [vitals, this.id],
+    );
   }
 
-  recordReward(reward: RewardComponents, action: ActionType, quirkDelta: Record<string, number>): void {
+  async recordReward(
+    reward: RewardComponents,
+    action: ActionType | string,
+    quirkDelta: Record<string, number>,
+  ): Promise<void> {
     this._last_reward = reward;
     this._last_action = action;
     this._tick += 1;
 
-    getDb().prepare(`
-      INSERT INTO reward_history
-        (soul_id, tick, r_profit, r_social, r_health, r_penalty, r_total, action_that_caused, quirk_delta, ts)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      this.id,
-      this._tick,
-      reward.r_profit,
-      reward.r_social,
-      reward.r_health,
-      reward.r_penalty,
-      reward.r_total,
-      action,
-      Object.keys(quirkDelta).length ? JSON.stringify(quirkDelta) : null,
-      Date.now(),
+    await getPool().query(
+      `INSERT INTO reward_history
+         (soul_id, tick, r_profit, r_social, r_health, r_penalty, r_total, action_that_caused, quirk_delta, ts)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        this.id,
+        this._tick,
+        reward.r_profit,
+        reward.r_social,
+        reward.r_health,
+        reward.r_penalty,
+        reward.r_total,
+        action,
+        Object.keys(quirkDelta).length ? quirkDelta : null,
+        Date.now(),
+      ],
     );
   }
 
-  creditWallet(amount: number, source: string): void {
+  async creditWallet(amount: number, source: string): Promise<void> {
     if (amount <= 0) return;
-    const db  = getDb();
-    const now = Date.now();
+    const pool = getPool();
+    const now  = Date.now();
 
-    db.prepare(`
-      UPDATE wallets
-      SET balance_abstract = balance_abstract + ?,
-          lifetime_earned  = lifetime_earned  + ?
-      WHERE soul_id = ?
-    `).run(amount, amount, this.id);
+    await pool.query(
+      `UPDATE wallets
+       SET balance_abstract = balance_abstract + $1,
+           lifetime_earned  = lifetime_earned  + $1
+       WHERE soul_id = $2`,
+      [amount, this.id],
+    );
 
-    db.prepare(`
-      INSERT INTO transactions (id, soul_id, type, source, amount, ts)
-      VALUES (?, ?, 'earned', ?, ?, ?)
-    `).run(uuidv4(), this.id, source, amount, now);
+    await pool.query(
+      `INSERT INTO transactions (id, soul_id, type, source, amount, ts)
+       VALUES ($1, $2, 'earned', $3, $4, $5)`,
+      [uuidv4(), this.id, source, amount, now],
+    );
 
-    // Phase 5: route to Stripe when real money is enabled
     if (stripeAdapter.isEnabled()) {
       stripeAdapter.transfer(this.id, amount, source).catch(err =>
         process.stderr.write(`[Wallet/Stripe] ${String(err)}\n`),
@@ -188,13 +200,13 @@ export class Soul {
     }
   }
 
-  snapshot(): SoulSnapshot {
+  async snapshot(): Promise<SoulSnapshot> {
     return {
       id:          this.id,
       name:        this.name,
       vitals:      this._vitals,
-      wallet:      this.loadWallet(),
-      quirks:      this.loadQuirks(),
+      wallet:      await this.loadWallet(),
+      quirks:      await this.loadQuirks(),
       last_action: this._last_action,
       last_reward: this._last_reward,
       is_active:   this._is_active,
@@ -202,42 +214,25 @@ export class Soul {
     };
   }
 
-  getPendingDirectives(): string[] {
-    const rows = getDb()
-      .prepare('SELECT message FROM directives WHERE soul_id = ? AND injected = 0 ORDER BY ts ASC')
-      .all(this.id) as Array<{ message: string }>;
-    return rows.map(r => r.message);
-  }
-
-  deactivate(): void {
+  async deactivate(): Promise<void> {
     this._is_active = false;
-    getDb()
-      .prepare('UPDATE souls SET is_active = 0 WHERE id = ?')
-      .run(this.id);
+    await getPool().query('UPDATE souls SET is_active = FALSE WHERE id = $1', [this.id]);
   }
 
-  private loadWallet(): WalletRow {
-    return getDb()
-      .prepare('SELECT * FROM wallets WHERE soul_id = ?')
-      .get(this.id) as WalletRow;
+  private async loadWallet(): Promise<WalletRow> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM wallets WHERE soul_id = $1',
+      [this.id],
+    );
+    return rows[0] as WalletRow;
   }
 
-  private loadQuirks(): QuirkRecord[] {
-    type QuirkDbRow = Omit<QuirkRecord, 'seeded' | 'persisted'> & { seeded: number; persisted: number };
-    const rows = getDb()
-      .prepare('SELECT * FROM quirks WHERE soul_id = ?')
-      .all(this.id) as QuirkDbRow[];
-
-    return rows.map(r => ({
-      id:                  r.id,
-      soul_id:             r.soul_id,
-      quirk_id:            r.quirk_id,
-      trigger:             r.trigger,
-      strength:            r.strength,
-      reinforcement_count: r.reinforcement_count,
-      created_at:          r.created_at,
-      seeded:    r.seeded    === 1,
-      persisted: r.persisted === 1,
-    }));
+  private async loadQuirks(): Promise<QuirkRecord[]> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM quirks WHERE soul_id = $1',
+      [this.id],
+    );
+    // pg returns BOOLEAN columns as JS boolean — no === 1 cast needed
+    return rows as QuirkRecord[];
   }
 }

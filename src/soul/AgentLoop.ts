@@ -1,4 +1,5 @@
-import { COOLDOWNS, ActionType, Significance } from '../types';
+import { STORY_HOUR_MS, ActionType, Significance } from '../types';
+import type { DirectiveTask, SoulGoal, QuirkRecord, VentureProposal, SoulVitals, WalletRow } from '../types';
 import { Soul } from './Soul';
 import { LLMDecider } from './LLMDecider';
 import { HardcodedDecider } from './HardcodedDecider';
@@ -7,7 +8,7 @@ import { scoreReward } from '../reward/RewardEngine';
 import { QuirkTracker } from '../quirks/QuirkTracker';
 import { WorldLog } from '../world/WorldLog';
 import { classifyEvent } from '../world/EventClassifier';
-import { pushSnapshot, worldEvents } from '../world/WorldState';
+import { pushSnapshot, worldEvents, invalidateObjectsCache } from '../world/WorldState';
 import { drain as drainDirectives } from '../world/DirectiveQueue';
 import { updatePosition } from '../world/PositionTracker';
 import { ollama } from '../llm/OllamaClient';
@@ -18,15 +19,44 @@ import {
   buildLibraryWorkPrompt,
   buildDirectiveInterpretationPrompt,
   buildIdeologyPrompt,
+  buildGoalFormationPrompt,
+  buildRegistryActionNarrationPrompt,
+  buildVentureResponsePrompt,
 } from '../llm/prompts';
-import type { DirectiveTask } from '../types';
-import { getDb } from '../db/client';
+import { getPool } from '../db/client';
+import { getRedis } from '../db/redisClient';
+import { embedText } from '../db/embed';
 import { integrationDispatcher } from '../integrations/IntegrationDispatcher';
+import { getRegistryActions, seedRegistry } from '../world/ActionRegistry';
+import { randomUUID } from 'crypto';
 
 const REFLECTION_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes real time
 const IDEOLOGY_INTERVAL_MS   = 8 * 60 * 1000; // 8 minutes real time
+const GOAL_INTERVAL_MS       = 10 * 60 * 1000; // 10 minutes real time
 const lastReflectionTime = new Map<string, number>();
 const lastIdeologyTime   = new Map<string, number>();
+const lastGoalTime       = new Map<string, number>();
+
+// ─── Wildcard impulses ────────────────────────────────────────────────────────
+
+const WILDCARDS = [
+  'A sudden restlessness makes you want to do something different today.',
+  'You find yourself thinking about one of your neighbours unexpectedly.',
+  'A creative urge surfaces — something wants to be made.',
+  'You wonder if there\'s a better way to spend your time in this tower.',
+  'A memory surfaces and puts you in a strange mood.',
+  'You feel an impulse to reach out to someone.',
+  'Something about the quiet of the tower makes you want to break it.',
+  'You\'re struck by an idea you\'ve never tried before.',
+  'A vague sense of ambition stirs inside you.',
+  'You notice how little you know about what the others are doing.',
+  'The thought of building something permanent crosses your mind.',
+  'You feel like today could be different from all the other days.',
+];
+
+function pickWildcard(): string {
+  return WILDCARDS[Math.floor(Math.random() * WILDCARDS.length)]!;
+}
 
 const log = (soulName: string, msg: string) =>
   process.stdout.write(`[${new Date().toISOString()}] [${soulName}] ${msg}\n`);
@@ -60,13 +90,28 @@ const worldLog         = new WorldLog();
 
 // ─── Main Loop ────────────────────────────────────────────────────────────────
 
+let registrySeeded = false;
+
 export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: string[] = []): Promise<void> {
+  if (!registrySeeded) {
+    registrySeeded = true;
+    await seedRegistry(soul.id);
+  }
+
   const usingLLM = await checkLLM();
   log(soul.name, `Agent loop started. LLM: ${usingLLM ? 'Ollama ✓' : 'hardcoded fallback'} | slot #${slotIndex}`);
 
   while (soul.is_active) {
     try {
-      await tick(soul, slotIndex, neighbours);
+      const now = Date.now();
+      if (now >= soul.actionEndTime) {
+        // Soul is free — make a new decision
+        await tick(soul, slotIndex, neighbours);
+      } else {
+        // Soul is busy — run background tasks while waiting
+        await backgroundPoll(soul, slotIndex, neighbours);
+        await sleep(30_000);
+      }
     } catch (err) {
       log(soul.name, `Error: ${String(err)}`);
       await sleep(5_000);
@@ -78,15 +123,22 @@ export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: st
 
 async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promise<void> {
   // 1. Observe
-  const { vitals: vitalsBefore, wallet, quirks: quirkList } = soul.observe();
+  const { vitals: vitalsBefore, wallet, quirks: quirkList } = await soul.observe();
 
   // Passive drift
   const driftedVitals = applyPassiveDrift(vitalsBefore);
-  soul.updateVitals(driftedVitals);
+  await soul.updateVitals(driftedVitals);
 
-  // 2. Drain visitor directives
-  const directives  = drainDirectives(soul.id);
-  const directive   = directives.at(-1)?.message; // most recent
+  // 2. Drain visitor directives (check for venture prefix before routing)
+  const directives = await drainDirectives(soul.id);
+  let directive: string | undefined;
+  for (const d of directives) {
+    if (d.message.startsWith('[VENTURE:')) {
+      await handleVentureDirective(soul, d.message, quirkList, neighbours);
+    } else {
+      directive = d.message; // most recent non-venture
+    }
+  }
   if (directive) {
     log(soul.name, `⚡ Visitor directive: "${directive}"`);
   }
@@ -101,33 +153,61 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
     }
   }
 
+  // 3b. Stochastic noise wildcard
+  const spontaneity = 0.05 + soul.reward_weights.w2_social * 0.2;
+  const wildcard = Math.random() > (1 - spontaneity) && !soul.active_task
+    ? pickWildcard()
+    : undefined;
+  if (wildcard) log(soul.name, `~ ${wildcard}`);
+
+  // 3c. Load episodic memories (semantic recall)
+  const contextText = `${soul.name}: vitals=${JSON.stringify(driftedVitals)}, ` +
+    `recent=${(await soul.recentActions(5)).join(',')}, directive=${directive ?? 'none'}`;
+  const recentMemories = await recallMemories(soul.id, contextText);
+
+  // 3d. Load active goal
+  const activeGoal = await loadActiveGoal(soul.id);
+
+  // 3e. Load registry actions
+  const registryActions = await getRegistryActions();
+
   // 4. Decide
   const timeOfDay = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-  const action    = llmOnline
+  const action = llmOnline
     ? await llmDecider.decide(
         soul.identity, driftedVitals, soul.reward_weights,
         wallet, quirkList, soul.last_reward, soul.last_action,
         timeOfDay, directive, neighbours, soul.active_task,
+        recentMemories, wildcard, activeGoal, registryActions, soul.tick, soul.id,
       )
     : { ...hardcodedDecider.decide(driftedVitals, soul.reward_weights, quirkList, soul.last_reward) };
 
   const taskNote      = soul.active_task ? ` [task: ${soul.active_task.description}]` : '';
   const reasoningNote = action.reasoning ? ` ("${action.reasoning}")` : '';
-  log(soul.name, `Tick #${soul.tick + 1} — ${action.type}${reasoningNote}${taskNote}`);
+  const hoursNote     = action.story_hours ? ` [${action.story_hours}h]` : '';
+  log(soul.name, `Tick #${soul.tick + 1} — ${action.type}${hoursNote}${reasoningNote}${taskNote}`);
 
-  // 4. Generate LLM text for creative/social actions
+  // 4b. Generate LLM text for creative/social actions
   let generatedText: string | undefined;
+  const label = action.type as string;
   if (llmOnline) {
-    if (action.type === ActionType.CREATE_CONTENT) {
+    if (/create_content/.test(label)) {
       generatedText = await generateContent(soul, quirkList, neighbours);
-    } else if (action.type === ActionType.SOCIAL_POST || action.type === ActionType.MEET_SOUL) {
-      generatedText = await generateSocialText(soul, quirkList, action.type, neighbours);
-    } else if (
-      action.type === ActionType.WRITE_BOOK ||
-      action.type === ActionType.CREATE_ART ||
-      action.type === ActionType.BROWSE_WEB
-    ) {
-      generatedText = await generateLibraryWork(soul, quirkList, action.type, neighbours);
+    } else if (/social_post|tweet|post/.test(label)) {
+      generatedText = await generateSocialText(soul, quirkList, ActionType.SOCIAL_POST, neighbours);
+    } else if (/meet_soul|meet_/.test(label)) {
+      generatedText = await generateSocialText(soul, quirkList, ActionType.MEET_SOUL, neighbours);
+    } else if (/write_book/.test(label)) {
+      generatedText = await generateLibraryWork(soul, quirkList, ActionType.WRITE_BOOK, neighbours);
+    } else if (/create_art/.test(label)) {
+      generatedText = await generateLibraryWork(soul, quirkList, ActionType.CREATE_ART, neighbours);
+    } else if (/browse_web/.test(label)) {
+      generatedText = await generateLibraryWork(soul, quirkList, ActionType.BROWSE_WEB, neighbours);
+    } else {
+      // All other actions: registry narration (includes novel auto-registered labels)
+      const regAction = registryActions.find(r => r.label === label);
+      const actionDesc = regAction?.description ?? action.description ?? label;
+      generatedText = await generateRegistryActionText(soul, label, actionDesc, neighbours);
     }
   }
 
@@ -146,15 +226,15 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
       const completedTask = soul.active_task;
       soul.setActiveTask(null);
       log(soul.name, `✅ Task completed: "${completedTask.description}"`);
-      worldLog.append({
-        soul_id:     soul.id,
+      void worldLog.append({
+        soul_id:      soul.id,
         significance: Significance.NOTABLE,
-        action:      action.type,
-        description: `${soul.name} completed directive task: "${completedTask.description}"`,
-        metadata:    { directive: completedTask.directive },
-        ts:          Date.now(),
+        action:       action.type,
+        description:  `${soul.name} completed directive task: "${completedTask.description}"`,
+        metadata:     { directive: completedTask.directive },
+        ts:           Date.now(),
       });
-    } else if (soul.active_task.relevant_actions.includes(action.type)) {
+    } else if (soul.active_task.relevant_actions.includes(action.type as string)) {
       const remaining = soul.active_task.max_steps - soul.active_task.steps_completed;
       log(soul.name, `  Task progress: ${soul.active_task.steps_completed}/${soul.active_task.max_steps} steps (${remaining} remaining)`);
     }
@@ -164,50 +244,41 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   const reward = scoreReward(soul.reward_weights, driftedVitals, result.vitals_after, result);
 
   // 7. Update vitals + wallet
-  soul.updateVitals(result.vitals_after);
+  await soul.updateVitals(result.vitals_after);
   if (result.profit_delta > 0) {
-    soul.creditWallet(result.profit_delta, `${action.type}_abstract`);
+    await soul.creditWallet(result.profit_delta, `${action.type}_abstract`);
   }
 
   // 8. Quirk tracking + reward record
-  const quirkDelta = quirks.reinforce(soul.id, action.type, reward.r_total);
-  soul.recordReward(reward, action.type, quirkDelta);
+  const quirkDelta = await quirks.reinforce(soul.id, action.type as string, reward.r_total);
+  await soul.recordReward(reward, action.type, quirkDelta);
 
   // 9. Store generated content in soul_memory + library_works for library actions
   if (generatedText) {
-    const isLibraryAction = (
-      action.type === ActionType.WRITE_BOOK ||
-      action.type === ActionType.CREATE_ART ||
-      action.type === ActionType.BROWSE_WEB
-    );
-    const memType = action.type === ActionType.CREATE_CONTENT
-      ? 'content'
-      : isLibraryAction
-      ? 'library_work'
-      : 'social';
-    saveSoulMemory(soul.id, memType, generatedText, { action: action.type });
+    const isLibraryAction = /write_book|create_art|browse_web/.test(label);
+    const isContentAction = /create_content/.test(label);
+    const memType = isContentAction ? 'content' : isLibraryAction ? 'library_work' : 'social';
+    void saveSoulMemory(soul.id, memType, generatedText, { action: label }).catch(() => {});
 
     if (isLibraryAction) {
-      const workType = action.type === ActionType.WRITE_BOOK
-        ? 'writing'
-        : action.type === ActionType.CREATE_ART
-        ? 'art'
+      const workType = /write_book/.test(label) ? 'writing'
+        : /create_art/.test(label) ? 'art'
         : 'research';
-      saveLibraryWork(soul.id, workType, generatedText, { action: action.type });
+      void saveLibraryWork(soul.id, workType, generatedText, { action: label }).catch(() => {});
     }
   }
 
   // 10. Classify + log event
-  const walletAfter  = soul.observe().wallet;
+  const walletAfter = (await soul.observe()).wallet;
   const significance = classifyEvent({
-    action:       action.type,
+    action:       action.type as string,
     result,
     wallet:       walletAfter,
     walletBefore: { balance_abstract: wallet.balance_abstract },
     rewardTotal:  reward.r_total,
   });
 
-  worldLog.append({
+  void worldLog.append({
     soul_id:     soul.id,
     significance,
     action:      action.type,
@@ -228,12 +299,17 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   }
 
   // 11. Fire integrations (Ghost, Twitter, Reddit, @asphodel_tower)
-  await integrationDispatcher.dispatch(soul, action.type, significance, generatedText, result);
+  await integrationDispatcher.dispatch(soul, action.type as string, significance, generatedText, result);
 
   // 12. Update 3D position
-  updatePosition(soul.id, action.type, slotIndex);
+  await updatePosition(soul.id, label, slotIndex);
 
-  // 13. Periodic reflection + ideology development
+  // Invalidate world objects cache if an object action was performed
+  if (['place_object', 'modify_object', 'gift_object'].includes(label)) {
+    invalidateObjectsCache();
+  }
+
+  // 13. Periodic reflection + ideology + goal development
   const nowMs   = Date.now();
   const lastRef = lastReflectionTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastRef >= REFLECTION_INTERVAL_MS) {
@@ -247,21 +323,72 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
     await runIdeology(soul, quirkList, neighbours);
   }
 
+  const lastGoal = lastGoalTime.get(soul.id) ?? 0;
+  if (llmOnline && nowMs - lastGoal >= GOAL_INTERVAL_MS) {
+    lastGoalTime.set(soul.id, nowMs);
+    await runGoalFormation(soul, quirkList, neighbours);
+  }
+
+  // 13b. Possibly initiate a venture on collaborative registry actions
+  if (llmOnline && neighbours.length > 0) {
+    const regAction = registryActions.find(r => r.label === label && r.is_collaborative);
+    if (regAction && Math.random() < 0.3) {
+      await initiateVenture(soul, regAction.label, regAction.description, neighbours);
+    }
+  }
+
   // 14. Broadcast
-  pushSnapshot(soul.snapshot());
+  pushSnapshot(await soul.snapshot());
   worldEvents.emit('update');
 
-  // 15. Cooldown
-  const cooldown = COOLDOWNS[action.type];
-  log(soul.name, `sleeping ${cooldown / 1000}s…`);
-  await sleep(cooldown);
+  // 15. Set action end time (time-based scheduling — no sleep here)
+  const hours = action.story_hours ?? 1;
+  soul.setActionEndTime(Date.now() + hours * STORY_HOUR_MS);
+  log(soul.name, `action committed for ${hours} story-hour${hours !== 1 ? 's' : ''} (~${hours} min)`);
+}
+
+// ─── Background poll (runs while soul is busy with an action) ─────────────────
+
+async function backgroundPoll(soul: Soul, slotIndex: number, neighbours: string[]): Promise<void> {
+  const llmOnline = await checkLLM();
+  const nowMs = Date.now();
+  const { quirks: quirkList } = await soul.observe();
+
+  // Reflection every 2 min
+  const lastRef = lastReflectionTime.get(soul.id) ?? 0;
+  if (llmOnline && nowMs - lastRef >= REFLECTION_INTERVAL_MS) {
+    lastReflectionTime.set(soul.id, nowMs);
+    await runReflection(soul, quirkList, neighbours);
+  }
+
+  // Ideology every 8 min
+  const lastIde = lastIdeologyTime.get(soul.id) ?? 0;
+  if (llmOnline && nowMs - lastIde >= IDEOLOGY_INTERVAL_MS) {
+    lastIdeologyTime.set(soul.id, nowMs);
+    await runIdeology(soul, quirkList, neighbours);
+  }
+
+  // Goals every 10 min
+  const lastGoal = lastGoalTime.get(soul.id) ?? 0;
+  if (llmOnline && nowMs - lastGoal >= GOAL_INTERVAL_MS) {
+    lastGoalTime.set(soul.id, nowMs);
+    await runGoalFormation(soul, quirkList, neighbours);
+  }
+
+  // Broadcast current state
+  pushSnapshot(await soul.snapshot());
+
+  const remaining = Math.max(0, soul.actionEndTime - nowMs);
+  log(soul.name, `busy (${Math.round(remaining / 1000)}s remaining)`);
+
+  void slotIndex; // used in tick, not here
 }
 
 // ─── LLM sub-tasks ────────────────────────────────────────────────────────────
 
 async function interpretDirective(
   soul: Soul,
-  vitals: ReturnType<Soul['observe']>['vitals'],
+  vitals: SoulVitals,
   directive: string,
   neighbours: string[],
 ): Promise<DirectiveTask | null> {
@@ -277,10 +404,9 @@ async function interpretDirective(
 
   try {
     const parsed = JSON.parse(raw) as { task?: string; actions?: string[]; steps?: number };
-    const validActions = Object.values(ActionType) as string[];
     const relevant = (parsed.actions ?? [])
-      .map(a => a.trim().toLowerCase())
-      .filter(a => validActions.includes(a)) as ActionType[];
+      .map(a => a.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''))
+      .filter(a => a.length > 0);
 
     if (!parsed.task || !relevant.length) return null;
 
@@ -300,14 +426,14 @@ async function interpretDirective(
 
 async function generateContent(
   soul: Soul,
-  quirkList: ReturnType<Soul['observe']>['quirks'],
+  quirkList: QuirkRecord[],
   neighbours: string[],
 ): Promise<string | undefined> {
   const prompt = buildContentPrompt({
     identity:      soul.identity,
     vitals:        soul.vitals,
     quirks:        quirkList,
-    recentActions: soul.recentActions(5),
+    recentActions: await soul.recentActions(5),
     neighbours,
   });
 
@@ -324,7 +450,7 @@ async function generateContent(
 
 async function generateSocialText(
   soul: Soul,
-  quirkList: ReturnType<Soul['observe']>['quirks'],
+  quirkList: QuirkRecord[],
   actionType: ActionType.SOCIAL_POST | ActionType.MEET_SOUL,
   neighbours: string[],
 ): Promise<string | undefined> {
@@ -354,17 +480,17 @@ async function generateSocialText(
 
 async function runReflection(
   soul: Soul,
-  quirkList: ReturnType<Soul['observe']>['quirks'],
+  quirkList: QuirkRecord[],
   neighbours: string[],
 ): Promise<void> {
-  const { wallet } = soul.observe();
+  const { wallet } = await soul.observe();
   const prompt = buildReflectionPrompt({
     identity:      soul.identity,
     vitals:        soul.vitals,
     wallet,
     quirks:        quirkList,
-    recentActions: soul.recentActions(10),
-    rewardTrend:   soul.recentRewardAvg(10),
+    recentActions: await soul.recentActions(10),
+    rewardTrend:   await soul.recentRewardAvg(10),
     neighbours,
   });
 
@@ -377,9 +503,9 @@ async function runReflection(
     if (!reflection) return;
 
     log(soul.name, `[reflection] ${reflection}`);
-    saveSoulMemory(soul.id, 'reflection', reflection, { tick: soul.tick });
+    void saveSoulMemory(soul.id, 'reflection', reflection, { tick: soul.tick }).catch(() => {});
 
-    worldLog.append({
+    void worldLog.append({
       soul_id:      soul.id,
       significance: Significance.NOTABLE,
       action:       'reflection',
@@ -392,17 +518,17 @@ async function runReflection(
 
 async function runIdeology(
   soul: Soul,
-  quirkList: ReturnType<Soul['observe']>['quirks'],
+  quirkList: QuirkRecord[],
   neighbours: string[],
 ): Promise<void> {
-  const { wallet } = soul.observe();
+  const { wallet } = await soul.observe();
   const prompt = buildIdeologyPrompt({
     identity:      soul.identity,
     vitals:        soul.vitals,
     wallet,
     quirks:        quirkList,
-    recentActions: soul.recentActions(10),
-    rewardTrend:   soul.recentRewardAvg(10),
+    recentActions: await soul.recentActions(10),
+    rewardTrend:   await soul.recentRewardAvg(10),
     neighbours,
   });
 
@@ -415,9 +541,9 @@ async function runIdeology(
     if (!belief) return;
 
     log(soul.name, `[ideology] ${belief}`);
-    saveSoulMemory(soul.id, 'ideology', belief, { tick: soul.tick });
+    void saveSoulMemory(soul.id, 'ideology', belief, { tick: soul.tick }).catch(() => {});
 
-    worldLog.append({
+    void worldLog.append({
       soul_id:      soul.id,
       significance: Significance.NOTABLE,
       action:       'reflection',
@@ -430,7 +556,7 @@ async function runIdeology(
 
 async function generateLibraryWork(
   soul: Soul,
-  quirkList: ReturnType<Soul['observe']>['quirks'],
+  quirkList: QuirkRecord[],
   actionType: ActionType.WRITE_BOOK | ActionType.CREATE_ART | ActionType.BROWSE_WEB,
   neighbours: string[],
 ): Promise<string | undefined> {
@@ -453,29 +579,313 @@ async function generateLibraryWork(
   return undefined;
 }
 
-function saveSoulMemory(
-  soulId: string,
-  type: string,
-  content: string,
-  metadata: Record<string, unknown>,
-): void {
-  getDb().prepare(`
-    INSERT INTO soul_memory (soul_id, type, content, metadata, ts)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(soulId, type, content, JSON.stringify(metadata), Date.now());
+// ─── Phase 0: Memory recall ───────────────────────────────────────────────────
+
+async function recallMemories(soulId: string, contextText: string): Promise<string[]> {
+  const embedding = await embedText(contextText);
+  if (!embedding) {
+    // fallback: recency
+    const { rows } = await getPool().query<{ content: string }>(
+      `SELECT content FROM soul_memory WHERE soul_id = $1
+       ORDER BY ts DESC LIMIT 5`,
+      [soulId],
+    );
+    return rows.map(r => r.content).reverse();
+  }
+  const vec = '[' + embedding.join(',') + ']';
+  const { rows } = await getPool().query<{ content: string }>(
+    `SELECT content FROM soul_memory WHERE soul_id = $1
+     ORDER BY embedding <=> $2::vector LIMIT 8`,
+    [soulId, vec],
+  );
+  return rows.map(r => r.content);
 }
 
-function saveLibraryWork(
+// ─── Phase 2: Goal loading ────────────────────────────────────────────────────
+
+async function loadActiveGoal(soulId: string): Promise<SoulGoal | null> {
+  const { rows } = await getPool().query(
+    `SELECT * FROM soul_goals WHERE soul_id = $1 AND status = 'active'
+     ORDER BY priority DESC LIMIT 1`,
+    [soulId],
+  );
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+
+  return {
+    id:             row['id'] as string,
+    soul_id:        row['soul_id'] as string,
+    goal_text:      row['goal_text'] as string,
+    formed_at:      row['formed_at'] as number,
+    priority:       row['priority'] as 1 | 2 | 3,
+    sub_goals:      (row['sub_goals'] as string[] | null) ?? null,     // JSONB — already parsed
+    progress_notes: (row['progress_notes'] as string[] | null) ?? null,
+    status:         row['status'] as SoulGoal['status'],
+  };
+}
+
+async function runGoalFormation(
+  soul: Soul,
+  quirkList: QuirkRecord[],
+  neighbours: string[],
+): Promise<void> {
+  const { wallet } = await soul.observe();
+  const existingGoal = await loadActiveGoal(soul.id);
+
+  const prompt = buildGoalFormationPrompt({
+    identity:      soul.identity,
+    vitals:        soul.vitals,
+    wallet,
+    quirks:        quirkList,
+    recentActions: await soul.recentActions(10),
+    existingGoal,
+    neighbours,
+  });
+
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true });
+  if (!raw) return;
+
+  try {
+    const parsed = JSON.parse(raw) as { goal?: string; sub_goals?: string[]; priority?: number };
+    if (!parsed.goal) return;
+
+    const priority = Math.max(1, Math.min(3, parsed.priority ?? 2)) as 1 | 2 | 3;
+    const subGoals = (parsed.sub_goals ?? []).slice(0, 3);
+    const pool = getPool();
+
+    if (existingGoal) {
+      await pool.query(
+        `UPDATE soul_goals SET goal_text = $1, priority = $2, sub_goals = $3 WHERE id = $4`,
+        [parsed.goal, priority, subGoals, existingGoal.id],
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO soul_goals (id, soul_id, goal_text, formed_at, priority, sub_goals, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
+        [randomUUID(), soul.id, parsed.goal, Date.now(), priority, subGoals],
+      );
+    }
+
+    log(soul.name, `[goal] P${priority}: "${parsed.goal}"`);
+    void worldLog.append({
+      soul_id:      soul.id,
+      significance: Significance.NOTABLE,
+      action:       'goal_formation',
+      description:  `${soul.name} sets a goal (P${priority}): "${parsed.goal}"`,
+      metadata:     { sub_goals: subGoals },
+      ts:           Date.now(),
+    });
+  } catch { /* ignore */ }
+}
+
+// ─── Phase 3: Registry action narration ──────────────────────────────────────
+
+async function generateRegistryActionText(
+  soul: Soul,
+  label: string,
+  description: string,
+  neighbours: string[],
+): Promise<string | undefined> {
+  const prompt = buildRegistryActionNarrationPrompt({
+    identity:          soul.identity,
+    actionLabel:       label,
+    actionDescription: description,
+    neighbours,
+  });
+
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8 });
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as { narration?: string };
+    return parsed.narration ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Phase 5: Venture logic ───────────────────────────────────────────────────
+
+async function initiateVenture(
+  soul: Soul,
+  actionLabel: string,
+  description: string,
+  neighbours: string[],
+): Promise<void> {
+  if (neighbours.length === 0) return;
+
+  const partnerName = neighbours[Math.floor(Math.random() * neighbours.length)]!;
+  const pool = getPool();
+
+  const { rows: partnerRows } = await pool.query<{ id: string }>(
+    'SELECT id FROM souls WHERE name = $1',
+    [partnerName],
+  );
+  if (!partnerRows[0]) return;
+  const partnerId = partnerRows[0].id;
+
+  const ventureId = randomUUID();
+  const split = { initiator: 0.6, partner: 0.4 };
+
+  await pool.query(
+    `INSERT INTO joint_ventures (id, initiator_id, partner_id, action_label, description, reward_split, status, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'negotiating', $7)`,
+    [ventureId, soul.id, partnerId, actionLabel, description, split, Date.now()],
+  );
+
+  const proposalId = randomUUID();
+  const message = `[VENTURE:${ventureId}] ${soul.name} proposes collaborating on "${actionLabel}": ${description}. Proposed split: you get 40%, I get 60%.`;
+
+  await pool.query(
+    `INSERT INTO venture_proposals (id, venture_id, from_soul_id, to_soul_id, message, ts)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [proposalId, ventureId, soul.id, partnerId, message, Date.now()],
+  );
+
+  // Enqueue directive: DB write + Redis push so partner's drain picks it up
+  const directiveId = randomUUID();
+  const directiveTs = Date.now();
+  await pool.query(
+    `INSERT INTO directives (id, soul_id, visitor_id, message, injected, ts)
+     VALUES ($1, $2, $3, $4, FALSE, $5)`,
+    [directiveId, partnerId, soul.id, message, directiveTs],
+  );
+  const redis = getRedis();
+  await redis.rpush(`directives:${partnerId}`, JSON.stringify({ id: directiveId, soul_id: partnerId, visitor_id: soul.id, message, ts: directiveTs }));
+  await redis.expire(`directives:${partnerId}`, 86400);
+
+  log(soul.name, `[venture] Proposed "${actionLabel}" to ${partnerName}`);
+}
+
+async function handleVentureDirective(
+  soul: Soul,
+  message: string,
+  quirkList: QuirkRecord[],
+  neighbours: string[],
+): Promise<void> {
+  const match = message.match(/^\[VENTURE:([^\]]+)\]/);
+  if (!match) return;
+
+  const ventureId = match[1]!;
+  const pool = getPool();
+
+  const { rows: ventureRows } = await pool.query(
+    'SELECT * FROM joint_ventures WHERE id = $1',
+    [ventureId],
+  );
+  const venture = ventureRows[0] as Record<string, unknown> | undefined;
+  if (!venture || venture['status'] !== 'negotiating') return;
+
+  // Count prior counter-proposals to prevent infinite loops
+  const { rows: counterRows } = await pool.query<{ cnt: string }>(
+    `SELECT COUNT(*) as cnt FROM venture_proposals WHERE venture_id = $1 AND response = 'counter'`,
+    [ventureId],
+  );
+  const counterCount = Number(counterRows[0]?.cnt ?? 0);
+
+  if (counterCount >= 2) {
+    await pool.query(`UPDATE joint_ventures SET status = 'rejected' WHERE id = $1`, [ventureId]);
+    return;
+  }
+
+  const { rows: initiatorRows } = await pool.query<{ name: string }>(
+    'SELECT name FROM souls WHERE id = $1',
+    [venture['initiator_id'] as string],
+  );
+  const { wallet } = await soul.observe();
+  const activeGoal = await loadActiveGoal(soul.id);
+
+  const split = venture['reward_split'] as { initiator: number; partner: number }; // JSONB
+  const prompt = buildVentureResponsePrompt({
+    identity:      soul.identity,
+    vitals:        soul.vitals,
+    proposerName:  initiatorRows[0]?.name ?? 'someone',
+    actionLabel:   venture['action_label'] as string,
+    description:   venture['description'] as string,
+    proposedSplit: split,
+    activeGoal,
+    neighbours,
+  });
+
+  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8 });
+  if (!raw) return;
+
+  try {
+    const parsed = JSON.parse(raw) as { response?: string; counter_text?: string; reasoning?: string };
+    const response = parsed.response as VentureProposal['response'];
+    if (!response) return;
+
+    await pool.query(
+      `UPDATE venture_proposals SET response = $1, counter_text = $2 WHERE venture_id = $3 AND to_soul_id = $4`,
+      [response, parsed.counter_text ?? null, ventureId, soul.id],
+    );
+
+    if (response === 'accepted') {
+      await pool.query(`UPDATE joint_ventures SET status = 'active' WHERE id = $1`, [ventureId]);
+      log(soul.name, `[venture] Accepted venture ${ventureId}`);
+      void worldLog.append({
+        soul_id:      soul.id,
+        significance: Significance.NOTABLE,
+        action:       'venture_accepted',
+        description:  `${soul.name} joined a venture with ${initiatorRows[0]?.name ?? 'a neighbour'}: "${venture['action_label']}"`,
+        metadata:     { venture_id: ventureId },
+        ts:           Date.now(),
+      });
+    } else if (response === 'rejected') {
+      await pool.query(`UPDATE joint_ventures SET status = 'rejected' WHERE id = $1`, [ventureId]);
+      log(soul.name, `[venture] Rejected venture ${ventureId}`);
+    } else {
+      // Counter — send back to initiator
+      const counterMsg = `[VENTURE:${ventureId}] ${soul.name} counters: ${parsed.counter_text ?? 'different terms'}`;
+      const counterDirectiveId = randomUUID();
+      const counterTs = Date.now();
+      const targetId = venture['initiator_id'] as string;
+      await pool.query(
+        `INSERT INTO directives (id, soul_id, visitor_id, message, injected, ts)
+         VALUES ($1, $2, $3, $4, FALSE, $5)`,
+        [counterDirectiveId, targetId, soul.id, counterMsg, counterTs],
+      );
+      const redis = getRedis();
+      await redis.rpush(`directives:${targetId}`, JSON.stringify({ id: counterDirectiveId, soul_id: targetId, visitor_id: soul.id, message: counterMsg, ts: counterTs }));
+      await redis.expire(`directives:${targetId}`, 86400);
+      log(soul.name, `[venture] Countered venture ${ventureId}`);
+    }
+  } catch { /* ignore */ }
+
+  void quirkList; // used elsewhere
+}
+
+async function saveSoulMemory(
   soulId: string,
   type: string,
   content: string,
   metadata: Record<string, unknown>,
-): void {
-  const lines  = content.split('\n');
-  const title  = lines[0]?.trim() ?? 'Untitled';
-  const body   = lines.slice(2).join('\n').trim();  // skip blank line after title
-  getDb().prepare(`
-    INSERT INTO library_works (soul_id, type, title, content, metadata, ts)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(soulId, type, title, body || content, JSON.stringify(metadata), Date.now());
+): Promise<void> {
+  const embedding = await embedText(content);
+  const vec = embedding ? '[' + embedding.join(',') + ']' : null;
+  await getPool().query(
+    `INSERT INTO soul_memory (soul_id, type, content, metadata, ts, embedding)
+     VALUES ($1, $2, $3, $4, $5, $6::vector)`,
+    [soulId, type, content, metadata, Date.now(), vec],
+  );
 }
+
+async function saveLibraryWork(
+  soulId: string,
+  type: string,
+  content: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  const lines = content.split('\n');
+  const title = lines[0]?.trim() ?? 'Untitled';
+  const body  = lines.slice(2).join('\n').trim(); // skip blank line after title
+
+  await getPool().query(
+    `INSERT INTO library_works (soul_id, type, title, content, metadata, ts)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [soulId, type, title, body || content, metadata, Date.now()],
+  );
+}
+
+// Suppress unused import warning — JointVenture type referenced in venture flow
+void (undefined as unknown as ReturnType<typeof String> & { _jv?: typeof import('../types').ActionType });

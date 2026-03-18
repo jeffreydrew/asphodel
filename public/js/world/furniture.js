@@ -1,14 +1,10 @@
 // ─── Asphodel Tower — Furniture Loader ───────────────────────────────────────
 // Loads all GLTF furniture models and places them on their floor groups.
+// Positions match the blueprint floor plan images.
 // Exports: loadFurniture(floorGroups, gltfLoader, furnitureMeshes)
 //
-// Room layout per floor (all coords relative to floor centre, half = FLOOR_SIZE/2 = 8):
-//   LOBBY   — sofas west, chairs east, benches south wall, plants at corners
-//   KITCHEN — cabinets/appliances west wall, bar counter south, dining table centre-east
-//   OFFICE  — 5 desks north row, lounge sofa south, bookcases east wall
-//   GYM     — benches west, mats centre, stools/side-table east
-//   BEDROOM — 2 doubles + 3 singles west/east, nightstands, bookcases
-//   LIBRARY — reading nook SW, writing desks N-wall, art station SE, research terminal N-centre
+// Coord system: left=-x, right=+x, top(north)=+z, bottom(south)=-z
+// Elevator shaft at +x,+z corner (~x=28..40, z=28..40)
 
 import * as THREE from 'three';
 import { FLOORS, KIT } from './constants.js';
@@ -17,206 +13,286 @@ import { FLOORS, KIT } from './constants.js';
 
 export function loadFurniture(floorGroups, gltfLoader, furnitureMeshes) {
   const k = KIT;
+  // s = standard furniture scale (Kenney kit is ~1 unit = 1m at scale 1.0)
+  const s = 7.5;
+  // Desk-top y-offset for items placed ON a desk/counter at scale 7.5
+  const deskY = 6.25;
+  // Upper-cabinet y-offset
+  const upperY = 12.9;
 
   // ── LOBBY ─────────────────────────────────────────────────────────────────
   const g0 = floorGroups[0], L = FLOORS[0].y;
-  glb(`${k}loungeSofa.glb`,           -5.5, L,  -4.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeSofaLong.glb`,       -5.5, L,  -1.0, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeSofaCorner.glb`,     -5.5, L,   2.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCoffee.glb`,          -4.0, L,  -2.5, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCoffee.glb`,          -4.0, L,   1.5, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,         -4.8, L,  -2.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,         -4.8, L,   1.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}televisionModern.glb`,     -7.2, L,  -3.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}cabinetTelevision.glb`,    -7.2, L,  -3.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChair.glb`,           5.0, L,  -5.5, Math.PI * 1.25, 0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChair.glb`,           6.5, L,  -3.5, Math.PI * 1.0,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChairRelax.glb`,      6.5, L,  -1.0, Math.PI * 1.0,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}tableRound.glb`,            5.5, L,  -4.5, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRound.glb`,              5.5, L,  -4.5, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushion.glb`,          0.0, L,  -7.2, Math.PI,        0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushion.glb`,          3.5, L,  -7.2, Math.PI,        0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushion.glb`,         -3.5, L,  -7.2, Math.PI,        0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, L,  -7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, L,  -7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, L,   7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, L,   7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall1.glb`,          -3.0, L,   7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall2.glb`,           3.0, L,   7.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,      -7.0, L,  -1.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,       7.0, L,   2.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}coatRackStanding.glb`,      6.5, L,   6.5, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}speaker.glb`,             -7.2, L,  -4.5, Math.PI * 0.5,  0.9, g0, 0, gltfLoader, furnitureMeshes);
-  glb(`${k}rugSquare.glb`,             0.0, L,   4.0, 0,              0.9, g0, 0, gltfLoader, furnitureMeshes);
+
+  // West Lounge — sofas facing each other with coffee tables (z=2..38 area, x=-38..-10)
+  // Row 1: sofas against west wall facing east
+  glb(`${k}loungeSofaLong.glb`,      -37, L,  28, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofa.glb`,          -37, L,  20, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofa.glb`,          -37, L,  12, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  // Coffee tables between
+  glb(`${k}tableCoffee.glb`,         -28, L,  26, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffee.glb`,         -28, L,  16, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,        -28, L,  26, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,        -28, L,  16, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  // Row 2: sofas facing west
+  glb(`${k}loungeSofa.glb`,          -20, L,  28, Math.PI * -0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofa.glb`,          -20, L,  20, Math.PI * -0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofaCorner.glb`,    -20, L,  12, Math.PI * -0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  // Small tables/rugs in lounge
+  glb(`${k}rugRectangle.glb`,        -28, L,   6, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffeeSquare.glb`,   -28, L,   6, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+
+  // Reception desk — center
+  glb(`${k}desk.glb`,                  0, L,   8, Math.PI, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}computerScreen.glb`,        0, L + deskY, 8, Math.PI, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,             0, L,  12, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+
+  // East Meeting — round table with chairs (x=8..22, z=-14..-2)
+  glb(`${k}tableRound.glb`,           17, L,  -6, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRound.glb`,             17, L,  -6, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChair.glb`,          11, L,  -6, Math.PI * 0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChair.glb`,          23, L,  -6, Math.PI * -0.5, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChair.glb`,          17, L,   0, Math.PI, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChair.glb`,          17, L, -12, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+
+  // Waiting area — benches along south wall
+  glb(`${k}benchCushion.glb`,         10, L, -36, Math.PI, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}benchCushion.glb`,         18, L, -36, Math.PI, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofa.glb`,           14, L, -28, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+
+  // Decorations
+  glb(`${k}pottedPlant.glb`,         -37, L,  36, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,          22, L, -36, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}lampSquareFloor.glb`,     -37, L,   2, 0, s, g0, 0, gltfLoader, furnitureMeshes);
+  glb(`${k}coatRackStanding.glb`,    -37, L, -36, 0, s, g0, 0, gltfLoader, furnitureMeshes);
 
   // ── KITCHEN ───────────────────────────────────────────────────────────────
   const g1 = floorGroups[1], Ki = FLOORS[1].y;
-  glb(`${k}kitchenCabinet.glb`,       -7.0, Ki, -6.0, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCabinet.glb`,       -7.0, Ki, -4.5, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCabinet.glb`,       -7.0, Ki, -3.0, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenFridge.glb`,        -7.0, Ki, -1.0, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenStove.glb`,         -7.0, Ki,  1.5, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}hoodModern.glb`,           -7.0, Ki + 1.5,  1.5, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenSink.glb`,          -7.0, Ki,  4.0, Math.PI * 0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCabinetUpperDouble.glb`, -7.0, Ki + 1.55, -5.3, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCabinetUpperDouble.glb`, -7.0, Ki + 1.55, -3.0, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCabinetUpper.glb`,  -7.0, Ki + 1.55,  4.0, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenMicrowave.glb`,     -6.2, Ki + 0.95, -6.0, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenCoffeeMachine.glb`, -6.2, Ki + 0.95, -4.5, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}toaster.glb`,              -6.2, Ki + 0.95, -3.0, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenBlender.glb`,       -6.2, Ki + 0.95, -1.5, Math.PI * 0.5, 0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenBarEnd.glb`,         0.0, Ki, -6.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenBar.glb`,            1.5, Ki, -6.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenBar.glb`,            3.0, Ki, -6.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}kitchenBar.glb`,            4.5, Ki, -6.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}stoolBar.glb`,              1.5, Ki, -5.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}stoolBar.glb`,              3.0, Ki, -5.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}stoolBar.glb`,             4.5,  Ki, -5.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}table.glb`,                 3.0, Ki,  1.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCloth.glb`,            3.0, Ki,  1.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             1.5, Ki,  1.5, Math.PI * 0.5,   0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             4.5, Ki,  1.5, Math.PI * -0.5,  0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             3.0, Ki,  3.0, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             3.0, Ki,  0.0, Math.PI,         0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          3.0, Ki,  1.5, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, Ki,  7.0, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, Ki,  7.0, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,        6.0, Ki,  6.0, 0,               0.9, g1, 1, gltfLoader, furnitureMeshes);
+
+  // Kitchen Prep — west wall appliances (x≈-37, z=18..36)
+  glb(`${k}kitchenCabinet.glb`,      -37, Ki,  34, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenCabinet.glb`,      -37, Ki,  30, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenFridge.glb`,       -37, Ki,  26, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenStove.glb`,        -37, Ki,  22, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}hoodModern.glb`,          -37, Ki + upperY, 22, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenSink.glb`,         -30, Ki,  37, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+  // Upper cabinets
+  glb(`${k}kitchenCabinetUpperDouble.glb`, -37, Ki + upperY, 32, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenCabinetUpper.glb`, -37, Ki + upperY, 26, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  // Countertop appliances
+  glb(`${k}kitchenMicrowave.glb`,    -34, Ki + deskY, 34, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenCoffeeMachine.glb`,-34, Ki + deskY, 30, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}toaster.glb`,             -24, Ki + deskY, 37, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+
+  // Bar counter island + stools (center of kitchen area)
+  glb(`${k}kitchenBar.glb`,          -10, Ki,  -4, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenBar.glb`,           -4, Ki,  -4, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenBarEnd.glb`,         2, Ki,  -4, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}stoolBar.glb`,            -10, Ki,  -8, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}stoolBar.glb`,             -4, Ki,  -8, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}stoolBar.glb`,              2, Ki,  -8, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+
+  // Dining Area — rectangular table with chairs (center-right)
+  glb(`${k}table.glb`,                 0, Ki,   6, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCloth.glb`,            0, Ki,   6, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            -4, Ki,   6, Math.PI * 0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,             4, Ki,   6, Math.PI * -0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,             0, Ki,  10, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,             0, Ki,   2, Math.PI, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,          0, Ki,   6, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+
+  // Pantry (SE, x=10..38, z=-38..-18)
+  glb(`${k}kitchenCabinet.glb`,       20, Ki, -30, Math.PI * -0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenCabinet.glb`,       20, Ki, -36, Math.PI * -0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}kitchenFridgeSmall.glb`,   36, Ki, -34, Math.PI * -0.5, s, g1, 1, gltfLoader, furnitureMeshes);
+
+  // Decorations
+  glb(`${k}pottedPlant.glb`,         -37, Ki,  37, 0, s, g1, 1, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,          22, Ki, -37, 0, s, g1, 1, gltfLoader, furnitureMeshes);
 
   // ── OFFICE ────────────────────────────────────────────────────────────────
   const g2 = floorGroups[2], O = FLOORS[2].y;
-  for (let i = 0; i < 5; i++) {
-    const dx = -6.0 + i * 3.0;
-    glb(`${k}desk.glb`,               dx,       O,          -5.5, 0,         0.9, g2, 2, gltfLoader, furnitureMeshes);
-    glb(`${k}computerScreen.glb`,     dx,       O + 0.75,   -5.5, 0,         0.9, g2, 2, gltfLoader, furnitureMeshes);
-    glb(`${k}computerKeyboard.glb`,   dx + 0.4, O + 0.75,   -4.8, 0,         0.9, g2, 2, gltfLoader, furnitureMeshes);
-    glb(`${k}chairDesk.glb`,          dx,       O,          -4.0, Math.PI,    0.9, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Open Workspace — north wall desks with computers (4 stations, z≈36)
+  for (let i = 0; i < 4; i++) {
+    const dx = -24 + i * 12;
+    glb(`${k}desk.glb`,              dx, O, 36, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+    glb(`${k}computerScreen.glb`,    dx, O + deskY, 36, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+    glb(`${k}computerKeyboard.glb`,  dx + 1, O + deskY, 37, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+    glb(`${k}chairDesk.glb`,         dx, O, 32, Math.PI, s, g2, 2, gltfLoader, furnitureMeshes);
   }
-  glb(`${k}bookcaseOpen.glb`,          7.2, O, -4.5, Math.PI * -0.5, 0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseOpen.glb`,          7.2, O, -2.5, Math.PI * -0.5, 0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseClosed.glb`,        7.2, O, -0.5, Math.PI * -0.5, 0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseClosedWide.glb`,    7.2, O,  2.0, Math.PI * -0.5, 0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}books.glb`,                 7.2, O + 1.2, -3.5, Math.PI * -0.5, 0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeSofa.glb`,            0.0, O,  5.5, Math.PI,         0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChair.glb`,          -2.5, O,  4.0, Math.PI * 1.25,  0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChair.glb`,           2.5, O,  4.0, Math.PI * 0.75,  0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCoffeeGlass.glb`,      0.0, O,  3.5, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          0.0, O,  4.8, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,       7.0, O,  6.5, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,      -7.0, O,  6.5, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}speaker.glb`,             -7.2, O, -6.5, Math.PI * 0.5,   0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}trashcan.glb`,            -6.0, O,  7.0, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, O,  7.0, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, O,  7.0, 0,               0.9, g2, 2, gltfLoader, furnitureMeshes);
-  glb(`${k}laptop.glb`,              -6.0, O + 0.75, -5.5, Math.PI,   0.7, g2, 2, gltfLoader, furnitureMeshes);
+  // Second row chairs
+  for (let i = 0; i < 4; i++) {
+    const dx = -24 + i * 12;
+    glb(`${k}chairDesk.glb`,         dx, O, 26, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  }
+
+  // Meeting Room (west, x=-38..-10, z=10..22)
+  glb(`${k}table.glb`,              -24, O,  14, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,          -30, O,  14, Math.PI * 0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,          -18, O,  14, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,          -24, O,  18, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,          -24, O,  10, Math.PI, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,       -24, O,  14, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Reception desk (center)
+  glb(`${k}desk.glb`,                 4, O,   0, Math.PI, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}computerScreen.glb`,       4, O + deskY, 0, Math.PI, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            4, O,   4, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Library Wall bookcases (along x=18, east side of library wall)
+  glb(`${k}bookcaseOpen.glb`,        18, O,  -8, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseOpen.glb`,        18, O,  -2, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosed.glb`,      18, O,   6, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosedWide.glb`,  18, O,  14, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}books.glb`,               18, O + 10.0, 10, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Lounge Area (SW, x=-38..-14, z=-38..-18)
+  glb(`${k}loungeSofa.glb`,         -34, O, -28, Math.PI * 0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofaLong.glb`,     -26, O, -36, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffee.glb`,        -28, O, -28, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,       -28, O, -30, Math.PI * 0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChair.glb`,        -22, O, -24, Math.PI, s, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Break Room (SE, x=6..14, z=-38..-18)
+  glb(`${k}loungeSofa.glb`,          10, O, -28, Math.PI * -0.5, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffeeGlass.glb`,    12, O, -32, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}stoolBar.glb`,            10, O, -36, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+
+  // Plants & decor
+  glb(`${k}pottedPlant.glb`,        -37, O, -37, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,         22, O,  37, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}lampSquareFloor.glb`,    -37, O,  37, 0, s, g2, 2, gltfLoader, furnitureMeshes);
+  glb(`${k}trashcan.glb`,           -12, O, -37, 0, s, g2, 2, gltfLoader, furnitureMeshes);
 
   // ── GYM ───────────────────────────────────────────────────────────────────
   const g3 = floorGroups[3], G = FLOORS[3].y;
-  glb(`${k}benchCushionLow.glb`,      -5.5, G, -5.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushionLow.glb`,      -5.5, G, -2.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushionLow.glb`,      -5.5, G,  0.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushionLow.glb`,      -5.5, G,  3.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          1.0, G, -2.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          1.0, G,  2.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          4.5, G, -0.5, Math.PI * 0.5,  0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          4.5, G, -4.5, Math.PI * 0.5,  0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}stoolBar.glb`,              6.5, G, -5.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}stoolBar.glb`,              6.5, G, -3.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}sideTable.glb`,             6.5, G, -4.5, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}radio.glb`,               -7.2, G,  3.0, Math.PI * 0.5,  0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushion.glb`,          0.0, G, -7.2, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}benchCushion.glb`,          3.5, G, -7.2, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,       7.0, G, -7.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,      -7.0, G, -7.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, G,  7.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, G,  7.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
-  glb(`${k}trashcan.glb`,             -6.0, G,  7.0, 0,              0.9, g3, 3, gltfLoader, furnitureMeshes);
+
+  // Yoga Zone — mats (NW, z>16)
+  glb(`${k}rugRectangle.glb`,        -8, G,  30, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,         4, G,  30, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,        16, G,  30, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+
+  // Main Gym Floor — weight benches along west wall
+  glb(`${k}benchCushionLow.glb`,    -36, G,  -4, Math.PI * 0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}benchCushionLow.glb`,    -36, G, -12, Math.PI * 0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}benchCushionLow.glb`,    -36, G, -20, Math.PI * 0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  // Equipment mats on gym floor
+  glb(`${k}rugRectangle.glb`,         0, G,  -4, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,         0, G, -20, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  // East wall water station
+  glb(`${k}sideTable.glb`,           22, G,   8, Math.PI * -0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}sideTable.glb`,           22, G,  -8, Math.PI * -0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+
+  // Locker Room (SE, x=18..38, z=-38..-18)
+  glb(`${k}benchCushion.glb`,        24, G, -28, Math.PI * -0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}benchCushion.glb`,        24, G, -34, Math.PI * -0.5, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}coatRackStanding.glb`,    34, G, -22, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+
+  // Decorations
+  glb(`${k}pottedPlant.glb`,        -37, G,  37, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,         22, G,  37, 0, s, g3, 3, gltfLoader, furnitureMeshes);
+  glb(`${k}radio.glb`,              -37, G, -37, Math.PI * 0.5, s, g3, 3, gltfLoader, furnitureMeshes);
 
   // ── BEDROOM ───────────────────────────────────────────────────────────────
   const g4 = floorGroups[4], Be = FLOORS[4].y;
-  glb(`${k}bedDouble.glb`,            -5.5, Be, -5.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}bedDouble.glb`,             5.5, Be, -5.0, Math.PI,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}bedSingle.glb`,            -5.5, Be, -0.5, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}bedSingle.glb`,             5.5, Be, -0.5, Math.PI,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}bedSingle.glb`,            -5.5, Be,  3.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}cabinetBed.glb`,           -4.0, Be, -6.2, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}cabinetBed.glb`,            4.0, Be, -6.2, Math.PI,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}cabinetBedDrawerTable.glb`,-4.0, Be,  1.2, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,       -3.8, Be + 0.6, -6.2, 0,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,        3.8, Be + 0.6, -6.2, 0,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundFloor.glb`,       -7.0, Be,  5.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundFloor.glb`,        7.0, Be,  5.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseClosedWide.glb`,    7.2, Be,  4.0, Math.PI * -0.5, 0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}sideTableDrawers.glb`,      7.2, Be, -6.5, Math.PI * -0.5, 0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}sideTableDrawers.glb`,     -7.2, Be,  5.0, Math.PI *  0.5, 0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}coatRack.glb`,             -7.0, Be, -6.5, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRounded.glb`,           -5.5, Be, -5.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRounded.glb`,            5.5, Be, -5.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          0.0, Be,  3.5, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}pillow.glb`,               -5.5, Be + 0.5, -5.8, 0,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}pillow.glb`,                5.5, Be + 0.5, -5.8, Math.PI,  0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}pillowLong.glb`,           -5.5, Be + 0.5, -4.2, 0,        0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, Be,  7.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, Be,  7.0, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall1.glb`,          -5.5, Be,  5.5, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall2.glb`,           5.5, Be,  5.5, 0,              0.9, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Apt 1 (x=-40..-24, z=8..40)
+  glb(`${k}bedDouble.glb`,          -32, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}cabinetBed.glb`,         -28, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,     -28, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}coatRack.glb`,           -37, Be,  12, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRounded.glb`,         -32, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Apt 2 (x=-24..-8, z=8..40)
+  glb(`${k}bedDouble.glb`,          -16, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}cabinetBed.glb`,         -12, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,     -12, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRounded.glb`,         -16, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Apt 3 (x=-8..8, z=8..40)
+  glb(`${k}bedSingle.glb`,            0, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}cabinetBed.glb`,           4, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,       4, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRounded.glb`,           0, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Apt 4 (x=8..24, z=8..40)
+  glb(`${k}bedSingle.glb`,           16, Be,  30, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}cabinetBed.glb`,          20, Be,  36, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,      20, Be + 5.0, 36, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRounded.glb`,          16, Be,  22, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Apt 5 (east, x=16..40, z=-16..8)
+  glb(`${k}bedDouble.glb`,           30, Be,  -4, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}cabinetBed.glb`,          36, Be,   2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundTable.glb`,      36, Be + 5.0, 2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}sideTableDrawers.glb`,    36, Be, -10, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosedWide.glb`,  36, Be, -14, Math.PI * -0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Common Area (south, z < 8)
+  glb(`${k}loungeSofa.glb`,          -8, Be,  -2, Math.PI * 0.5, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofaLong.glb`,       0, Be,  -8, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffee.glb`,         -2, Be,  -2, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRectangle.glb`,        -2, Be,  -4, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundFloor.glb`,     -37, Be,  -8, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundFloor.glb`,      12, Be,  -8, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+
+  // Decorations
+  glb(`${k}pottedPlant.glb`,        -37, Be,  37, 0, s, g4, 4, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,         22, Be, -14, 0, s, g4, 4, gltfLoader, furnitureMeshes);
 
   // ── LIBRARY ───────────────────────────────────────────────────────────────
   const g5 = floorGroups[5], Li = FLOORS[5].y;
-  // Archive wall (east)
-  glb(`${k}bookcaseOpen.glb`,          7.2, Li,  -6.0, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseOpen.glb`,          7.2, Li,  -4.0, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseClosed.glb`,        7.2, Li,  -2.0, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseClosedWide.glb`,    7.2, Li,   0.5, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseOpen.glb`,          7.2, Li,   2.8, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}books.glb`,                 7.2, Li + 1.2, -5.0, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}books.glb`,                 7.2, Li + 1.2,  1.5, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  // Reading nook (SW)
-  glb(`${k}loungeChairRelax.glb`,     -6.5, Li,   5.0, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChairRelax.glb`,     -5.0, Li,   5.5, Math.PI * 0.75, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}loungeChair.glb`,          -6.5, Li,   2.5, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCoffee.glb`,          -5.0, Li,   4.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRound.glb`,             -5.5, Li,   4.2, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundFloor.glb`,       -7.0, Li,   6.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  // Writing desks (N wall)
-  glb(`${k}desk.glb`,                 -6.0, Li,  -5.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}desk.glb`,                 -3.5, Li,  -5.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}desk.glb`,                 -1.0, Li,  -5.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,            -6.0, Li,  -4.0, Math.PI,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,            -3.5, Li,  -4.0, Math.PI,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,            -1.0, Li,  -4.0, Math.PI,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,       -6.0, Li + 0.75, -5.8, 0,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}lampRoundTable.glb`,       -3.5, Li + 0.75, -5.8, 0,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,         -3.5, Li,  -4.8, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  // Art station (SE)
-  glb(`${k}table.glb`,                 3.5, Li,   5.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}tableCloth.glb`,            3.5, Li,   5.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             2.0, Li,   5.0, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             5.0, Li,   5.0, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}table.glb`,                 3.5, Li,   2.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRectangle.glb`,          3.5, Li,   4.0, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,       6.5, Li,   6.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  // Web research terminal (N, centre-east)
-  glb(`${k}desk.glb`,                  2.5, Li,  -5.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}computerScreen.glb`,        2.5, Li + 0.75, -5.5, 0,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}computerKeyboard.glb`,      2.9, Li + 0.75, -4.8, 0,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             2.5, Li,  -4.0, Math.PI,        0.9, g5, 5, gltfLoader, furnitureMeshes);
-  // Central display table
-  glb(`${k}tableRound.glb`,            0.0, Li,   0.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}books.glb`,                 0.0, Li + 0.75, 0.5, 0,         0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}rugRound.glb`,              0.0, Li,   0.5, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,            -1.5, Li,   0.5, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}chairDesk.glb`,             1.5, Li,   0.5, Math.PI * -0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Writing Desks — north wall, 4 desks with computers
+  for (let i = 0; i < 4; i++) {
+    const dx = -24 + i * 12;
+    glb(`${k}desk.glb`,              dx, Li, 36, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+    glb(`${k}computerScreen.glb`,    dx, Li + deskY, 36, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+    glb(`${k}chairDesk.glb`,         dx, Li, 32, Math.PI, s, g5, 5, gltfLoader, furnitureMeshes);
+  }
+
+  // Display Table — center of main floor
+  glb(`${k}tableRound.glb`,           0, Li,   4, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}books.glb`,                0, Li + deskY, 4, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRound.glb`,             0, Li,   4, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,           -4, Li,   4, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            4, Li,   4, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            0, Li,   8, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            0, Li,   0, Math.PI, s, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Reading Nook (SW, x < -16)
+  glb(`${k}loungeChairRelax.glb`,   -30, Li, -18, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeChairRelax.glb`,   -24, Li, -28, Math.PI * 0.75, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}loungeSofa.glb`,         -32, Li, -32, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}tableCoffee.glb`,        -24, Li, -22, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}rugRound.glb`,           -26, Li, -24, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}lampRoundFloor.glb`,     -37, Li, -37, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+
   // West wall bookcases
-  glb(`${k}bookcaseClosedWide.glb`,   -7.2, Li,  -5.5, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}bookcaseOpen.glb`,         -7.2, Li,  -3.0, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}books.glb`,               -7.2, Li + 1.2, -4.0, Math.PI * 0.5, 0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,           7.0, Li,   7.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}pottedPlant.glb`,          -7.0, Li,   7.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall1.glb`,          -2.5, Li,   7.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}plantSmall2.glb`,           1.5, Li,   7.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}lampSquareFloor.glb`,      -7.0, Li,   2.0, 0,              0.9, g5, 5, gltfLoader, furnitureMeshes);
-  glb(`${k}speaker.glb`,             -7.2, Li,   6.5, Math.PI * 0.5,  0.9, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosedWide.glb`, -37, Li,   4, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseOpen.glb`,       -37, Li,  12, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Archive Room (east, x > 16)
+  glb(`${k}bookcaseOpen.glb`,        37, Li, -22, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseOpen.glb`,        37, Li, -12, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosed.glb`,      37, Li,  -2, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseClosedWide.glb`,  37, Li,   8, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}bookcaseOpen.glb`,        37, Li,  18, Math.PI * -0.5, s, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Art Stable (x=0..8, z=-40..-24)
+  glb(`${k}table.glb`,                4, Li, -32, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,            4, Li, -28, Math.PI, s, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Art Station (x=8..16, z=-40..-24)
+  glb(`${k}desk.glb`,                12, Li, -32, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}computerScreen.glb`,      12, Li + deskY, -32, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}chairDesk.glb`,           12, Li, -28, Math.PI, s, g5, 5, gltfLoader, furnitureMeshes);
+
+  // Decorations
+  glb(`${k}pottedPlant.glb`,        -37, Li,  37, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}pottedPlant.glb`,         22, Li,  37, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}plantSmall1.glb`,         -8, Li, -37, 0, s, g5, 5, gltfLoader, furnitureMeshes);
+  glb(`${k}speaker.glb`,            -37, Li,  24, Math.PI * 0.5, s, g5, 5, gltfLoader, furnitureMeshes);
 }
 
 // ─── GLB loader helper ────────────────────────────────────────────────────────

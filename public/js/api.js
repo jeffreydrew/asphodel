@@ -69,3 +69,13 @@ export async function getArchive({ type, soulId, limit = 50 } = {}) {
   const res = await fetch(`${HTTP_BASE}/archive?${params}`);
   return res.ok ? res.json() : [];
 }
+
+export async function getLog({ soulId, since, significance, limit = 200 } = {}) {
+  const params = new URLSearchParams();
+  if (soulId)       params.set('soul_id',      soulId);
+  if (since)        params.set('since',         String(since));
+  if (significance) params.set('significance',  significance);
+  params.set('limit', String(limit));
+  const res = await fetch(`${HTTP_BASE}/log?${params}`);
+  return res.ok ? res.json() : [];
+}

@@ -1,5 +1,5 @@
 import { ActionType } from '../types';
-import type { SoulVitals, SoulIdentity, RewardWeights, QuirkRecord, RewardComponents, WalletRow, DirectiveTask } from '../types';
+import type { SoulVitals, SoulIdentity, RewardWeights, QuirkRecord, RewardComponents, WalletRow, DirectiveTask, SoulGoal, RegistryAction } from '../types';
 
 // ─── Sovereign Identity Preamble ──────────────────────────────────────────────
 
@@ -18,24 +18,7 @@ ${identity.bio}`;
 }
 
 // ─── Prompt 1: Decision ───────────────────────────────────────────────────────
-// Returns: { "action": "<ActionType>", "reasoning": "<1 sentence>" }
-
-const ACTION_DESCRIPTIONS: Record<ActionType, string> = {
-  [ActionType.BROWSE_JOBS]:    'Search job boards and task platforms for gig work',
-  [ActionType.SUBMIT_APP]:     'Apply to a gig or task you found earlier',
-  [ActionType.CREATE_CONTENT]: 'Write something — a blog post, article, or social thread',
-  [ActionType.MEET_SOUL]:      'Spend time talking with another soul in the tower',
-  [ActionType.SOCIAL_POST]:    'Post something on Twitter or Reddit as yourself',
-  [ActionType.REST]:           'Sleep or rest to recover energy',
-  [ActionType.EAT]:            'Have a meal to reduce hunger',
-  [ActionType.EXERCISE]:       'Work out to improve health',
-  [ActionType.IDLE]:           'Do nothing for a while',
-  // Library actions
-  [ActionType.READ_BOOK]:      'Go to the library and read — expand your mind, find peace',
-  [ActionType.WRITE_BOOK]:     'Write a longer creative or intellectual work in the library',
-  [ActionType.CREATE_ART]:     'Make art in the library — visual, textual, or abstract',
-  [ActionType.BROWSE_WEB]:     'Research a topic online in the library — learn something new',
-};
+// Returns: { "action": "snake_case_label", "description": "...", "hours": N, "reasoning": "..." }
 
 function vitalsLine(vitals: SoulVitals): string {
   return [
@@ -59,10 +42,24 @@ function quirksSection(quirks: QuirkRecord[]): string {
   return `\nYour known tendencies (earned over time):\n${lines.join('\n')}`;
 }
 
-function rewardSection(reward: RewardComponents | null, lastAction: ActionType | null): string {
+function rewardSection(reward: RewardComponents | null, lastAction: ActionType | string | null): string {
   if (!reward || !lastAction) return '';
   const sign = reward.r_total >= 0 ? '+' : '';
   return `\nLast action: ${lastAction} → total reward: ${sign}${reward.r_total.toFixed(4)}\n  Profit: ${reward.r_profit.toFixed(3)}, Social: ${reward.r_social.toFixed(3)}, Health: ${reward.r_health.toFixed(3)}, Penalty: -${reward.r_penalty.toFixed(3)}`;
+}
+
+function memoriesSection(memories: string[]): string {
+  if (!memories.length) return '';
+  const lines = memories.map((m, i) => `  ${i + 1}. "${m.substring(0, 120)}${m.length > 120 ? '…' : ''}"`).join('\n');
+  return `\nYour recent memories (most recent last):\n${lines}`;
+}
+
+function goalSection(goal: SoulGoal | null): string {
+  if (!goal) return '';
+  const steps = goal.sub_goals?.length
+    ? `\n  Steps: ${goal.sub_goals.map(s => `• ${s}`).join('; ')}`
+    : '';
+  return `\nYour current long-term goal (priority ${goal.priority}): "${goal.goal_text}"${steps}\nLet this guide your choices when no urgent needs press.`;
 }
 
 export function buildDecisionPrompt(params: {
@@ -72,48 +69,40 @@ export function buildDecisionPrompt(params: {
   wallet: WalletRow;
   quirks: QuirkRecord[];
   lastReward: RewardComponents | null;
-  lastAction: ActionType | null;
+  lastAction: ActionType | string | null;
   timeOfDay: string;
   directive?: string;
   activeTask?: DirectiveTask | null;
   neighbours?: string[];
+  recentMemories?: string[];
+  wildcard?: string;
+  activeGoal?: SoulGoal | null;
+  registryActions?: RegistryAction[];
+  tick?: number;
 }): string {
   const { identity, vitals, weights, wallet, quirks, lastReward, lastAction, timeOfDay } = params;
   const { activeTask } = params;
 
-  // When a task is active, restrict choices to task-relevant actions + critical biological needs
-  const EMERGENCY_ACTIONS = new Set<ActionType>([ActionType.EAT, ActionType.REST]);
   const needsEmergencyEat  = vitals.hunger     > 85;
   const needsEmergencyRest = vitals.energy     < 10 || vitals.sleep_debt > 85;
 
-  let actionList: string;
   let taskSection = '';
-
   if (activeTask) {
     const remaining = activeTask.max_steps - activeTask.steps_completed;
-    const allowed   = new Set<ActionType>(activeTask.relevant_actions);
-    if (needsEmergencyEat)  allowed.add(ActionType.EAT);
-    if (needsEmergencyRest) allowed.add(ActionType.REST);
-
-    actionList = Object.entries(ACTION_DESCRIPTIONS)
-      .filter(([key]) => allowed.has(key as ActionType))
-      .map(([key, desc]) => `  - ${key}: ${desc}`)
-      .join('\n');
-
     taskSection = `
 ⚡ ACTIVE TASK (${remaining} step${remaining !== 1 ? 's' : ''} remaining): ${activeTask.description}
 A visitor sent you this: "${activeTask.directive}"
 You are committed to completing this task. Choose an action that advances it.
 ${needsEmergencyEat || needsEmergencyRest ? '⚠️ Biological emergency detected — you may eat or rest first.' : ''}
 `;
-  } else {
-    actionList = Object.entries(ACTION_DESCRIPTIONS)
-      .map(([key, desc]) => `  - ${key}: ${desc}`)
-      .join('\n');
   }
 
   const newDirectiveLine = params.directive && !activeTask
     ? `\n⚡ A visitor of the tower has sent you a message: "${params.directive}"\nConsider this in your next action.\n`
+    : '';
+
+  const wildcardLine = params.wildcard && !activeTask
+    ? `\n~ ${params.wildcard}\n`
     : '';
 
   return `${buildIdentityPreamble(identity, params.neighbours)}
@@ -121,15 +110,20 @@ ${needsEmergencyEat || needsEmergencyRest ? '⚠️ Biological emergency detecte
 Current time: ${timeOfDay}
 ${vitalsLine(vitals)}
   Abstract wallet: $${wallet.balance_abstract.toFixed(2)}
-${quirksSection(quirks)}
+${quirksSection(quirks)}${memoriesSection(params.recentMemories ?? [])}
 Your motivations (reward weights):
   Profit: ${(weights.w1_profit * 100).toFixed(0)}%, Social: ${(weights.w2_social * 100).toFixed(0)}%, Health: ${(weights.w3_health * 100).toFixed(0)}%
-${rewardSection(lastReward, lastAction)}${taskSection}${newDirectiveLine}
-Available actions:
-${actionList}
+${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${taskSection}${wildcardLine}${newDirectiveLine}
+What will you do next? Consider your vitals, your goal, your memories, your neighbours.
 
-What will you do next?${activeTask ? ' You must work on your active task.' : ' Choose what fits your state, personality, and the time of day.\nOnly choose "rest" if sleep_debt > 65 or energy < 20 — otherwise stay active and productive.'}
-Respond ONLY in JSON: {"action": "<action_name>", "reasoning": "<one sentence>"}`;
+Respond ONLY with JSON — no prose before or after:
+{"action":"snake_case_label","description":"one sentence of what you do and why","hours":N,"reasoning":"internal monologue"}
+
+Rules:
+- action: lowercase snake_case, any label you choose (eat, sleep, write_manifesto, teach_yoga, stare_at_rain, anything)
+- description: what a camera would see + why you're doing it
+- hours: how many story-hours this takes (1–8; biological needs cap at 2)
+- reasoning: your private thoughts (not shown to others)`;
 }
 
 // ─── Prompt 0b: Directive Interpretation ──────────────────────────────────────
@@ -143,10 +137,6 @@ export function buildDirectiveInterpretationPrompt(params: {
 }): string {
   const { identity, vitals, directive } = params;
 
-  const actionList = Object.entries(ACTION_DESCRIPTIONS)
-    .map(([key, desc]) => `  ${key}: ${desc}`)
-    .join('\n');
-
   return `${buildIdentityPreamble(identity, params.neighbours)}
 
 A visitor of Asphodel Tower has sent you a directive: "${directive}"
@@ -154,16 +144,13 @@ A visitor of Asphodel Tower has sent you a directive: "${directive}"
 Your current state:
 ${vitalsLine(vitals)}
 
-Available actions you can take:
-${actionList}
-
 Interpret this directive as a concrete task. Decide:
 1. What are you going to do? (a short description of the task, first person, e.g. "I'm going to the gym to work out")
-2. Which action types will you perform to complete it? (pick 1–3 from the list above)
+2. Which action labels will you perform to complete it? (1–3 snake_case labels, e.g. "exercise, meditate, journal")
 3. How many action steps will it take? (1–4, depending on the task's complexity)
 
 Respond ONLY in JSON:
-{"task": "<what you are going to do, first person>", "actions": ["<action_name>", ...], "steps": <number>}`;
+{"task": "<what you are going to do, first person>", "actions": ["<label>", ...], "steps": <number>}`;
 }
 
 // ─── Prompt 2: Content Creation ───────────────────────────────────────────────
@@ -198,7 +185,7 @@ export function buildContentPrompt(params: {
 You've decided to create content. Your mood right now is ${moodDesc}.${context}
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}` : ''}
 
-Write a short, authentic piece of content (2–4 paragraphs). It could be a blog post, essay, or social thread. Write in your own voice — personal, direct, not corporate.
+Write an authentic piece of content — as long as it needs to be. It could be a blog post, essay, or social thread. Write in your own voice — personal, direct, not corporate.
 
 Respond ONLY in JSON: {"title": "<headline>", "body": "<the content>"}`;
 }
@@ -230,7 +217,7 @@ export function buildSocialPrompt(params: {
 
 You're having a conversation with ${other}. Your mood is ${moodDesc}.
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}\n` : ''}
-Write what you say or do during this meeting — 1 to 3 sentences. Be yourself.
+Write what you say or do during this meeting. Be yourself. Say as much or as little as feels right.
 
 Respond ONLY in JSON: {"message": "<what you say or do>"}`;
   }
@@ -241,7 +228,7 @@ Respond ONLY in JSON: {"message": "<what you say or do>"}`;
 
 You're posting on ${platform}. Your mood is ${moodDesc}.
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}\n` : ''}
-Write a genuine post — a thought, observation, or short story from your life in Asphodel Tower. 1–3 sentences. No hashtag spam.
+Write a genuine post — a thought, observation, or short story from your life in Asphodel Tower. Write freely. No hashtag spam.
 
 Respond ONLY in JSON: {"message": "<post text>"}`;
 }
@@ -275,7 +262,7 @@ export function buildLibraryWorkPrompt(params: {
 You are in the Asphodel Tower library. You've sat down to write something longer and more considered than a blog post. Your mood is ${moodDesc}.
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}` : ''}
 
-Write a short but meaningful piece — a personal essay, a story opening, a manifesto, or a letter. 2–5 paragraphs. Write in your own voice, from the heart.
+Write a meaningful piece — a personal essay, a story opening, a manifesto, or a letter. Write as much as feels right, from the heart.
 
 Respond ONLY in JSON: {"title": "<title>", "body": "<the work>"}`;
   }
@@ -286,7 +273,7 @@ Respond ONLY in JSON: {"title": "<title>", "body": "<the work>"}`;
 You are in the Asphodel Tower library at the art station. Your mood is ${moodDesc}.
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}` : ''}
 
-Create a piece of art using words. This could be a poem, visual description, lyric fragment, or abstract piece. Let it be strange, honest, or beautiful. 1–3 stanzas or sections.
+Create a piece of art using words. This could be a poem, visual description, lyric fragment, or abstract piece. Let it take whatever form and length feels right.
 
 Respond ONLY in JSON: {"title": "<title>", "body": "<the artwork>"}`;
   }
@@ -297,7 +284,7 @@ Respond ONLY in JSON: {"title": "<title>", "body": "<the artwork>"}`;
 You just spent time researching online in the Asphodel Tower library. Your mood is ${moodDesc}.
 ${quirkHints ? `\nYour tendencies:\n${quirkHints}` : ''}
 
-Write a short research note — what topic did you look into, and what did you find or think? 1–2 paragraphs, informal and personal.
+Write a research note — what topic did you look into, and what did you find or think? Write as much as you found interesting, informal and personal.
 
 Respond ONLY in JSON: {"title": "<topic>", "body": "<your notes>"}`;
 }
@@ -333,7 +320,7 @@ Wallet: $${wallet.balance_abstract.toFixed(2)} abstract.
 Health: ${vitals.health}/100, Happiness: ${vitals.happiness}/100.
 ${persistedQuirks ? `Known quirks: ${persistedQuirks}.` : ''}
 
-Write 1–2 sentences of honest internal reflection. What are you thinking? What do you want?
+Think through this honestly. Write as much as you need. What are you thinking? What do you want?
 
 Respond ONLY in JSON: {"reflection": "<your thoughts>"}`;
 }
@@ -369,5 +356,98 @@ Happiness: ${vitals.happiness}/100, Health: ${vitals.health}/100.
 
 Articulate one specific belief or philosophical position you hold — something you've come to believe from living here. It could be about work, money, human connection, creativity, ambition, loneliness, or survival. Be specific. Be personal. This is your ideology — not generic wisdom, but something that belongs to you.
 
-Respond ONLY in JSON: {"belief": "<your belief, 1-2 sentences, first person>"}`;
+Respond ONLY in JSON: {"belief": "<your belief, first person>"}`;
+}
+
+// ─── Prompt 6: Goal Formation ─────────────────────────────────────────────────
+// Called periodically. Returns: { "goal": "...", "sub_goals": [...], "priority": 2 }
+
+export function buildGoalFormationPrompt(params: {
+  identity: SoulIdentity;
+  vitals: SoulVitals;
+  wallet: WalletRow;
+  quirks: QuirkRecord[];
+  recentActions: string[];
+  existingGoal: SoulGoal | null;
+  neighbours?: string[];
+}): string {
+  const { identity, vitals, wallet, quirks, recentActions, existingGoal } = params;
+
+  const persistedQuirks = quirks
+    .filter(q => q.persisted)
+    .map(q => `"${q.quirk_id}"`)
+    .join(', ');
+
+  const existingGoalLine = existingGoal
+    ? `Your current goal (priority ${existingGoal.priority}): "${existingGoal.goal_text}". Review it — update if still relevant or replace if you've grown beyond it.`
+    : 'You have no active long-term goal yet. Form one now.';
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You've been living in Asphodel Tower and experience has given you direction.
+
+What you've been doing lately: ${recentActions.slice(-5).join(', ') || 'settling in'}.
+Wallet: $${wallet.balance_abstract.toFixed(2)}. Happiness: ${vitals.happiness}/100.
+${persistedQuirks ? `Your tendencies: ${persistedQuirks}.` : ''}
+
+${existingGoalLine}
+
+Form a concrete, personal long-term goal grounded in who you are and what you've been doing. Keep it to 1–2 sentences. Break it into at most 3 concrete sub-goals. Assign a priority: 1 (low), 2 (medium), 3 (high).
+
+Respond ONLY in JSON: {"goal": "<your goal>", "sub_goals": ["<step 1>", "<step 2>"], "priority": 2}`;
+}
+
+// ─── Prompt 7: Registry Action Narration ─────────────────────────────────────
+// Generates a one-sentence narration for a custom registry action.
+
+export function buildRegistryActionNarrationPrompt(params: {
+  identity: SoulIdentity;
+  actionLabel: string;
+  actionDescription: string;
+  neighbours?: string[];
+}): string {
+  const { identity, actionLabel, actionDescription } = params;
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+You just performed the action "${actionLabel}": ${actionDescription}.
+
+Narrate what you did in one sentence, first person, personal and specific.
+
+Respond ONLY in JSON: {"narration": "<one sentence>"}`;
+}
+
+// ─── Prompt 8: Venture Response ───────────────────────────────────────────────
+// Returns: { "response": "accepted"|"counter"|"rejected", "counter_text": "...", "reasoning": "..." }
+
+export function buildVentureResponsePrompt(params: {
+  identity: SoulIdentity;
+  vitals: SoulVitals;
+  proposerName: string;
+  actionLabel: string;
+  description: string;
+  proposedSplit: { initiator: number; partner: number };
+  activeGoal: SoulGoal | null;
+  neighbours?: string[];
+}): string {
+  const { identity, vitals, proposerName, actionLabel, description, proposedSplit, activeGoal } = params;
+
+  const goalLine = activeGoal
+    ? `Your current goal: "${activeGoal.goal_text}". Consider whether this venture advances it.`
+    : '';
+
+  return `${buildIdentityPreamble(identity, params.neighbours)}
+
+${proposerName} has proposed a joint venture to you.
+
+Action: "${actionLabel}"
+What it involves: ${description}
+Proposed reward split: you receive ${Math.round(proposedSplit.partner * 100)}%, ${proposerName} receives ${Math.round(proposedSplit.initiator * 100)}%.
+
+Your state: Happiness ${vitals.happiness}/100, Energy ${vitals.energy}/100.
+${goalLine}
+
+Decide: accept the proposal, counter with different terms, or reject it. Be yourself — weigh this against your values, current state, and goals.
+
+Respond ONLY in JSON: {"response": "accepted"|"counter"|"rejected", "counter_text": "<only if counter>", "reasoning": "<why>"}`;
 }

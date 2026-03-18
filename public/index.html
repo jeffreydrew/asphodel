@@ -52,9 +52,46 @@
     <div class="floor-drag-hint">drag furniture<br>to rearrange</div>
   </div>
 
+  <!-- ── Edit Mode ──────────────────────────────────────────────── -->
+  <button id="edit-toggle-btn" class="edit-toggle-btn">✎ EDIT</button>
+
+  <div id="edit-panel" class="edit-panel">
+    <div class="edit-panel-title">EDIT MODE</div>
+
+    <div class="edit-undo-row">
+      <button id="edit-undo-btn" class="edit-small-btn" title="Undo (Ctrl+Z)" disabled>↩ Undo</button>
+      <button id="edit-redo-btn" class="edit-small-btn" title="Redo (Ctrl+Shift+Z)" disabled>↪ Redo</button>
+    </div>
+
+    <div class="edit-toolbar">
+      <button class="edit-tool-btn active" data-tool="select" title="Select / Move (Esc)">☐ Select</button>
+      <button class="edit-tool-btn" data-tool="add-furniture" title="Add Furniture">＋ Furniture</button>
+      <button class="edit-tool-btn" data-tool="wall" title="Draw Wall (click+drag)">▬ Wall</button>
+      <button class="edit-tool-btn" data-tool="doorway" title="Cut Doorway (click on wall)">⊟ Doorway</button>
+    </div>
+
+    <div id="edit-furniture-catalogue" style="display:none">
+      <div class="edit-section-label">FURNITURE</div>
+      <div id="edit-furniture-list" class="edit-catalogue"></div>
+    </div>
+
+    <div id="edit-props" style="display:none">
+      <div class="edit-section-label">SELECTED</div>
+      <div class="edit-props-row">
+        <button id="edit-rot-left" class="edit-small-btn" title="Rotate Left (Q)">↺</button>
+        <button id="edit-rot-right" class="edit-small-btn" title="Rotate Right (E)">↻</button>
+        <button id="edit-delete-btn" class="edit-small-btn edit-danger" title="Delete (Del)">✕</button>
+      </div>
+    </div>
+
+    <div class="edit-hints">
+      <span>Ctrl+Z undo · Ctrl+Shift+Z redo<br>Q/E rotate · Del delete · Esc deselect<br>Wall: click+drag to draw</span>
+    </div>
+  </div>
+
   <!-- ── World Log (bottom left) ──────────────────────────────── -->
   <div class="panel" id="world-log">
-    <div id="world-log-title">◈ WORLD LOG</div>
+    <div id="world-log-title" style="cursor:pointer" onclick="window.__openLogPanel?.()">◈ WORLD LOG</div>
     <div id="log-entries"></div>
   </div>
 
@@ -88,6 +125,44 @@
         <div id="archive-reader-title">Select a work</div>
         <div id="archive-reader-meta"></div>
         <div id="archive-reader-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Log Panel (full overlay) ─────────────────────────────── -->
+  <div id="log-panel">
+    <div id="log-panel-header">
+      <span>◈ WORLD LOG</span>
+      <div id="log-panel-filters">
+        <select id="log-sig-filter">
+          <option value="">All significance</option>
+          <option value="ROUTINE">Routine</option>
+          <option value="NOTABLE">Notable</option>
+          <option value="SIGNIFICANT">Significant</option>
+        </select>
+        <select id="log-soul-filter">
+          <option value="">All souls</option>
+        </select>
+        <select id="log-time-filter">
+          <option value="">All time</option>
+          <option value="3600">Last 1h</option>
+          <option value="21600">Last 6h</option>
+          <option value="86400">Last 24h</option>
+        </select>
+        <button id="log-panel-refresh">↺</button>
+      </div>
+      <button id="log-panel-close">✕</button>
+    </div>
+    <div id="log-panel-body">
+      <div id="log-panel-list"></div>
+      <div id="log-panel-reader">
+        <div id="log-reader-placeholder">Select an entry</div>
+        <div id="log-reader-sig"></div>
+        <div id="log-reader-action"></div>
+        <div id="log-reader-meta"></div>
+        <div id="log-reader-description"></div>
+        <div id="log-reader-reasoning"></div>
+        <div id="log-reader-generated"></div>
       </div>
     </div>
   </div>
@@ -132,6 +207,22 @@
     <div class="panel-section">
       <div class="panel-section-title">Last Reward</div>
       <div id="panel-rewards"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Identity</div>
+      <div id="panel-bio" class="identity-bio"></div>
+      <div id="panel-skills"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Personality</div>
+      <div id="panel-personality"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">Goals</div>
+      <div id="panel-goals"></div>
     </div>
   </div>
 

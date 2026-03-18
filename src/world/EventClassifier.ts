@@ -1,8 +1,8 @@
-import { ActionType, Significance } from '../types';
+import { Significance } from '../types';
 import type { ActionResult, WalletRow } from '../types';
 
 interface ClassifyInput {
-  action: ActionType;
+  action: string;
   result: ActionResult;
   wallet: WalletRow;
   walletBefore: Pick<WalletRow, 'balance_abstract'>;
@@ -32,17 +32,12 @@ export function classifyEvent(input: ClassifyInput): Significance {
   }
 
   // SIGNIFICANT: first ever content published (soul has created at least once)
-  if (action === ActionType.CREATE_CONTENT && result.success && wallet.lifetime_earned === result.profit_delta) {
+  if (/create_content|write_book|create_art/.test(action) && result.success && wallet.lifetime_earned === result.profit_delta) {
     return Significance.SIGNIFICANT;
   }
 
   // NOTABLE: high-value actions
-  if (
-    action === ActionType.SUBMIT_APP ||
-    action === ActionType.CREATE_CONTENT ||
-    action === ActionType.SOCIAL_POST ||
-    action === ActionType.MEET_SOUL
-  ) {
+  if (/submit_application|create_content|social_post|meet_soul|write_book|create_art/.test(action)) {
     return Significance.NOTABLE;
   }
 

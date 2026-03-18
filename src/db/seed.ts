@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from './client';
+import { getPool } from './pgClient';
 import type { SoulIdentity, SoulVitals, RewardWeights } from '../types';
 
 interface SoulSeed {
@@ -98,35 +98,43 @@ const SEEDS: SoulSeed[] = [
   },
 ];
 
-export function seedSouls(): void {
-  const db = getDb();
+export async function seedSouls(): Promise<void> {
+  const pool = getPool();
+  const client = await pool.connect();
   const now = Date.now();
 
-  const insertSoul = db.prepare(`
-    INSERT OR IGNORE INTO souls (id, name, email, identity, vitals, reward_weights, is_active, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-  `);
+  try {
+    await client.query('BEGIN');
 
-  const insertWallet = db.prepare(`
-    INSERT OR IGNORE INTO wallets (id, soul_id, balance_abstract, balance_real, currency, lifetime_earned, lifetime_spent)
-    VALUES (?, ?, 0.0, 0.0, 'USD', 0.0, 0.0)
-  `);
-
-  const seedAll = db.transaction(() => {
     for (const seed of SEEDS) {
       const soulId = uuidv4();
-      insertSoul.run(
-        soulId,
-        seed.name,
-        seed.email,
-        JSON.stringify(seed.identity),
-        JSON.stringify(seed.vitals),
-        JSON.stringify(seed.reward_weights),
-        now,
-      );
-      insertWallet.run(uuidv4(), soulId);
-    }
-  });
 
-  seedAll();
+      // Pass JS objects directly — pg serializes them as JSONB
+      const result = await client.query(
+        `INSERT INTO souls (id, name, email, identity, vitals, reward_weights, is_active, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
+         ON CONFLICT (email) DO NOTHING
+         RETURNING id`,
+        [soulId, seed.name, seed.email, seed.identity, seed.vitals, seed.reward_weights, now],
+      );
+
+      // Only create wallet if soul was actually inserted (not a duplicate)
+      if (result.rows.length > 0) {
+        const insertedId = result.rows[0].id as string;
+        await client.query(
+          `INSERT INTO wallets (id, soul_id, balance_abstract, balance_real, currency, lifetime_earned, lifetime_spent)
+           VALUES ($1, $2, 0.0, 0.0, 'USD', 0.0, 0.0)
+           ON CONFLICT (soul_id) DO NOTHING`,
+          [uuidv4(), insertedId],
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }

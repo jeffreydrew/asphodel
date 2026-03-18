@@ -1,14 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db/client';
+import { getPool } from '../db/pgClient';
 import type { SoulIdentity } from '../types';
-
-// Reddit OAuth2 "script" app flow.
-// Each soul can have their own credentials, or fall back to shared.
 
 function getSoulCreds(soulName: string): {
   clientId: string; clientSecret: string; username: string; password: string;
 } | null {
-  const key         = soulName.toUpperCase().replace(/\s+/g, '_');
+  const key          = soulName.toUpperCase().replace(/\s+/g, '_');
   const clientId     = process.env[`REDDIT_${key}_CLIENT_ID`]     ?? process.env['REDDIT_CLIENT_ID'];
   const clientSecret = process.env[`REDDIT_${key}_CLIENT_SECRET`] ?? process.env['REDDIT_CLIENT_SECRET'];
   const username     = process.env[`REDDIT_${key}_USERNAME`]      ?? process.env['REDDIT_USERNAME'];
@@ -18,7 +15,6 @@ function getSoulCreds(soulName: string): {
   return { clientId, clientSecret, username, password };
 }
 
-// Per-soul access token cache (in-memory, expires ~1h)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 async function getAccessToken(soulName: string): Promise<string | null> {
@@ -55,16 +51,15 @@ async function getAccessToken(soulName: string): Promise<string | null> {
   }
 }
 
-// Pick a subreddit based on soul skills/identity
 function pickSubreddit(identity: SoulIdentity): string {
   const skill = identity.skills_public[0]?.toLowerCase() ?? '';
   const map: Record<string, string> = {
-    copywriting:    'freelancewriters',
-    'data entry':   'beermoney',
-    research:       'samplesize',
-    writing:        'freelancewriters',
-    tutoring:       'learnprogramming',
-    communication:  'socialskills',
+    copywriting:   'freelancewriters',
+    'data entry':  'beermoney',
+    research:      'samplesize',
+    writing:       'freelancewriters',
+    tutoring:      'learnprogramming',
+    communication: 'socialskills',
   };
   for (const [k, v] of Object.entries(map)) {
     if (skill.includes(k)) return v;
@@ -86,9 +81,8 @@ export class RedditClient {
     const token = await getAccessToken(identity.full_name);
     if (!token) return { success: false, postId: null };
 
-    const sub    = subreddit ?? pickSubreddit(identity);
-    const title  = text.length > 100 ? text.substring(0, 97) + '…' : text;
-    const isSelf = true;
+    const sub   = subreddit ?? pickSubreddit(identity);
+    const title = text.length > 100 ? text.substring(0, 97) + '…' : text;
 
     try {
       const res = await fetch('https://oauth.reddit.com/api/submit', {
@@ -100,9 +94,9 @@ export class RedditClient {
         },
         body: new URLSearchParams({
           sr:       sub,
-          kind:     isSelf ? 'self' : 'link',
+          kind:     'self',
           title,
-          text:     isSelf ? text : '',
+          text,
           resubmit: 'true',
           nsfw:     'false',
         }).toString(),
@@ -117,10 +111,11 @@ export class RedditClient {
       const data   = await res.json() as { json: { data: { name: string } } };
       const postId = data.json?.data?.name ?? null;
 
-      getDb().prepare(`
-        INSERT INTO social_posts (id, soul_id, platform, external_id, content, ts)
-        VALUES (?, ?, 'reddit', ?, ?, ?)
-      `).run(uuidv4(), soulId, postId, text, Date.now());
+      await getPool().query(
+        `INSERT INTO social_posts (id, soul_id, platform, external_id, content, ts)
+         VALUES ($1, $2, 'reddit', $3, $4, $5)`,
+        [uuidv4(), soulId, postId, text, Date.now()],
+      );
 
       process.stdout.write(`[Reddit] u/${identity.username_pool['reddit'] ?? identity.full_name} → r/${sub}: "${title.substring(0, 60)}"\n`);
       return { success: true, postId };

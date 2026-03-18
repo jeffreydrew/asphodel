@@ -7,15 +7,28 @@
 
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { FLOORS, FLOOR_SIZE, SOUL_COLORS, ACTION_TASK_MAP, ELEV_X, ELEV_Z } from './constants.js';
+import { FLOORS, FLOOR_SIZE, SOUL_COLORS, ACTION_TASK_MAP, ELEV_X, ELEV_Z, FLOOR_WALLS, WANDER_ZONES } from './constants.js';
+import { findPath } from './pathfinding.js';
 
 // ─── Wander helper ────────────────────────────────────────────────────────────
 
-export function randomWanderPoint(floorY) {
-  let x, z;
+export function randomWanderPoint(floorY, floorIndex = -1) {
+  const zones = WANDER_ZONES[floorIndex];
+  if (!zones || zones.length === 0) {
+    let x, z;
+    do {
+      x = Math.random() * 70 - 35;
+      z = Math.random() * 70 - 35;
+    } while (Math.sqrt((x - ELEV_X) ** 2 + (z - ELEV_Z) ** 2) < 1.8);
+    return new THREE.Vector3(x, floorY, z);
+  }
+  const zone = zones[Math.floor(Math.random() * zones.length)];
+  const [x1, z1, x2, z2] = zone;
+  let x, z, attempts = 0;
   do {
-    x = (Math.random() - 0.5) * 12;
-    z = (Math.random() - 0.5) * 12;
+    x = x1 + Math.random() * (x2 - x1);
+    z = z1 + Math.random() * (z2 - z1);
+    if (++attempts > 20) { x = (x1 + x2) / 2; z = (z1 + z2) / 2; break; }
   } while (Math.sqrt((x - ELEV_X) ** 2 + (z - ELEV_Z) ** 2) < 1.8);
   return new THREE.Vector3(x, floorY, z);
 }
@@ -37,11 +50,10 @@ export class SoulAvatar {
     this.color          = SOUL_COLORS[index] ?? 0xffffff;
     this.floorY         = 0;
     this.floorIndex     = 0;
-    this.wanderTarget   = randomWanderPoint(0);
+    this.wanderTarget   = randomWanderPoint(0, 0);
     this.wanderTimer    = Math.random() * 4000;
     this.wanderDelay    = 3000 + Math.random() * 5000;
     this.isMoving       = false;
-    this.rearrangeTimer = 20000 + Math.random() * 20000;
     this._glbMeshes     = [];
     this._ctx           = worldCtx;
 
@@ -53,38 +65,38 @@ export class SoulAvatar {
     this.currentAction = 'idle';
     this.isSitting     = false;
     this.isAtComputer  = false;
+    this._taskSeatY    = 0;
+    this._walkTimer    = 0;
 
-    this.modelRoot = null;
-    this.legL      = null;
-    this.legR      = null;
+    // A* pathfinding waypoints
+    this._path         = [];    // array of {x, z} waypoints
+    this._pathIdx      = 0;     // current waypoint index
 
     this.group = new THREE.Group();
     scene.add(this.group);
 
     // Invisible hitbox for raycasting
     this.torso = new THREE.Mesh(
-      new THREE.BoxGeometry(0.45, 1.25, 0.35),
+      new THREE.BoxGeometry(1.125, 3.125, 0.875),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
-    this.torso.position.y = 0.62;
+    this.torso.position.y = 1.70;
     this.torso.visible    = false;
     this.torso.userData.soulId = soul.id;
     this.group.add(this.torso);
-    this.head    = this.torso;
-    this.body    = this.torso;
     this._torsoY = this.torso.position.y;
     this._headY  = this.torso.position.y;
 
     // Ground ring
     const ringMat = new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.45 });
-    this.ring = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.025, 6, 20), ringMat);
+    this.ring = new THREE.Mesh(new THREE.TorusGeometry(0.50, 0.0625, 6, 20), ringMat);
     this.ring.rotation.x = Math.PI / 2;
     this.ring.position.y = 0.01;
     this.group.add(this.ring);
 
     // Task ring (pulsing green when DOING_TASK)
     const taskRingMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0 });
-    this.taskRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.035, 6, 24), taskRingMat);
+    this.taskRing = new THREE.Mesh(new THREE.TorusGeometry(0.70, 0.0875, 6, 24), taskRingMat);
     this.taskRing.rotation.x = Math.PI / 2;
     this.taskRing.position.y = 0.01;
     this.taskRing.visible    = false;
@@ -96,65 +108,80 @@ export class SoulAvatar {
     labelDiv.textContent = soul.name.split(' ')[0];
     labelDiv.id          = `lbl-${soul.id}`;
     this.label = new CSS2DObject(labelDiv);
-    this.label.position.y = 1.45;
+    this.label.position.y = 3.875;
     this.group.add(this.label);
 
     this.group.position.copy(this.wanderTarget);
 
-    // Load GLB character
-    gltfLoader.load('/models/characters/sim_base.glb', (gltf) => {
-      this.modelRoot = gltf.scene;
-      this.modelRoot.scale.setScalar(0.55);
-      this.modelRoot.userData.soulId = soul.id;
-
-      const mat = new THREE.MeshLambertMaterial({
-        color:    this.color,
-        emissive: new THREE.Color(this.color).multiplyScalar(0.1),
-      });
-      this.modelRoot.traverse(child => {
-        if (child.isMesh) {
-          child.material = mat.clone();
-          child.userData.soulId = soul.id;
-          this._glbMeshes.push(child);
-        }
-      });
-      this.group.add(this.modelRoot);
-    }, undefined, () => { this._buildFallback(soul); });
+    this._buildRobloxChar(soul);
   }
 
-  // ─── Fallback procedural geometry ─────────────────────────────────────────
+  // ─── Roblox-style blocky character ────────────────────────────────────────
 
-  _buildFallback(soul) {
+  _buildRobloxChar(soul) {
     const mat = new THREE.MeshLambertMaterial({
       color:    this.color,
       emissive: new THREE.Color(this.color).multiplyScalar(0.1),
     });
-    const legMat = new THREE.MeshLambertMaterial({
-      color: new THREE.Color(this.color).multiplyScalar(0.55),
+    const darkMat = new THREE.MeshLambertMaterial({
+      color:    new THREE.Color(this.color).multiplyScalar(0.50),
+      emissive: new THREE.Color(this.color).multiplyScalar(0.05),
     });
 
-    const LEG_H = 0.28, TORSO_H = 0.36, HEAD_R = 0.13;
+    // Dimensions (×2.5 from original)
+    const LEG_H   = 0.75;
+    const TORSO_H = 0.95;
+    const HEAD_S  = 0.70;
+    const ARM_H   = 0.75;
 
-    this.legL = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.038, LEG_H, 6), legMat);
-    this.legR = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.038, LEG_H, 6), legMat);
-    this.legL.position.set(-0.062, LEG_H / 2, 0);
-    this.legR.position.set( 0.062, LEG_H / 2, 0);
-    this.group.add(this.legL);
-    this.group.add(this.legR);
+    // Legs — pivot group at hip, mesh offset down
+    this.legLPivot = new THREE.Group();
+    this.legLPivot.position.set(-0.225, LEG_H, 0);
+    const legLMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, LEG_H, 0.35), darkMat.clone());
+    legLMesh.position.y = -LEG_H / 2;
+    this.legLPivot.add(legLMesh);
+    this.group.add(this.legLPivot);
 
-    const torsoMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.13, TORSO_H, 7), mat);
-    torsoMesh.position.y = LEG_H + TORSO_H / 2;
-    torsoMesh.userData.soulId = soul.id;
-    this.group.add(torsoMesh);
+    this.legRPivot = new THREE.Group();
+    this.legRPivot.position.set( 0.225, LEG_H, 0);
+    const legRMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, LEG_H, 0.35), darkMat.clone());
+    legRMesh.position.y = -LEG_H / 2;
+    this.legRPivot.add(legRMesh);
+    this.group.add(this.legRPivot);
 
-    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 8, 7), mat.clone());
-    headMesh.position.y = LEG_H + TORSO_H + HEAD_R;
-    headMesh.userData.soulId = soul.id;
-    this.group.add(headMesh);
+    // Torso
+    this.torsoMesh = new THREE.Mesh(new THREE.BoxGeometry(0.80, TORSO_H, 0.45), mat.clone());
+    this.torsoMesh.position.y = LEG_H + TORSO_H / 2;
+    this.torsoMesh.userData.soulId = soul.id;
+    this.group.add(this.torsoMesh);
 
-    this._torsoY = torsoMesh.position.y;
-    this._headY  = headMesh.position.y;
-    this._glbMeshes = [torsoMesh, headMesh];
+    // Arms — pivot group at shoulder, mesh offset down
+    this.armLPivot = new THREE.Group();
+    this.armLPivot.position.set(-0.55, LEG_H + TORSO_H, 0);
+    const armLMesh = new THREE.Mesh(new THREE.BoxGeometry(0.30, ARM_H, 0.30), darkMat.clone());
+    armLMesh.position.y = -ARM_H / 2;
+    this.armLPivot.add(armLMesh);
+    this.group.add(this.armLPivot);
+
+    this.armRPivot = new THREE.Group();
+    this.armRPivot.position.set( 0.55, LEG_H + TORSO_H, 0);
+    const armRMesh = new THREE.Mesh(new THREE.BoxGeometry(0.30, ARM_H, 0.30), darkMat.clone());
+    armRMesh.position.y = -ARM_H / 2;
+    this.armRPivot.add(armRMesh);
+    this.group.add(this.armRPivot);
+
+    // Head
+    this.headMesh = new THREE.Mesh(new THREE.BoxGeometry(HEAD_S, HEAD_S, HEAD_S), mat.clone());
+    this.headMesh.position.y = LEG_H + TORSO_H + HEAD_S / 2 + 0.075;
+    this.headMesh.userData.soulId = soul.id;
+    this.group.add(this.headMesh);
+
+    this._torsoY = this.torsoMesh.position.y;
+    this._headY  = this.headMesh.position.y;
+
+    this._glbMeshes = [this.torsoMesh, this.headMesh,
+      ...this.armLPivot.children, ...this.armRPivot.children,
+      ...this.legLPivot.children, ...this.legRPivot.children];
   }
 
   // ─── Floor / task assignment ───────────────────────────────────────────────
@@ -175,12 +202,16 @@ export class SoulAvatar {
       this.floorIndex       = newIndex;
       this.floorY           = newFloorY;
       this.group.position.y = newFloorY;
-      this.wanderTarget     = randomWanderPoint(newFloorY);
+      this.wanderTarget     = randomWanderPoint(newFloorY, newIndex);
       this.wanderTimer      = 0;
       this.state            = 'WANDER';
       this.taskRing.visible = false;
       this.ring.visible     = true;
-      if (this.modelRoot) { this.modelRoot.position.y = 0; this.modelRoot.rotation.x = 0; }
+      this.torsoMesh.position.y = this._torsoY;
+      this.headMesh.position.y  = this._headY;
+      this.legLPivot.rotation.x = this.legRPivot.rotation.x = 0;
+      this.armLPivot.rotation.x = this.armRPivot.rotation.x = 0;
+      this._computePath(this.wanderTarget.x, this.wanderTarget.z);
     }
 
     if (this.state !== 'WANDER') return;
@@ -189,85 +220,149 @@ export class SoulAvatar {
     let taskDef = ACTION_TASK_MAP[lookupAction] ?? ACTION_TASK_MAP[action];
     if (!taskDef && isWorkHours) taskDef = ACTION_TASK_MAP['browse_jobs'];
 
+    if (!taskDef) {
+      // Keyword floor fallback for novel action labels
+      const l = action.toLowerCase();
+      let inferredFloorIndex = 0; // lobby default
+      if (/rest|sleep|nap/.test(l))      inferredFloorIndex = 4; // BEDROOM
+      else if (/eat|cook|food/.test(l))  inferredFloorIndex = 1; // KITCHEN
+      else if (/work|job|apply/.test(l)) inferredFloorIndex = 2; // OFFICE
+      else if (/exercise|gym|yoga/.test(l)) inferredFloorIndex = 3; // GYM
+      else if (/read|write|book|art|journal|research/.test(l)) inferredFloorIndex = 5; // LIBRARY
+
+      const inferredFloor = FLOORS[inferredFloorIndex];
+      if (inferredFloor && inferredFloorIndex !== this.floorIndex) {
+        this.floorIndex       = inferredFloorIndex;
+        this.floorY           = inferredFloor.y;
+        this.group.position.y = inferredFloor.y;
+        this.wanderTarget     = randomWanderPoint(inferredFloor.y, inferredFloorIndex);
+        this.wanderTimer      = 0;
+        this.state            = 'WANDER';
+        this.taskRing.visible = false;
+        this.ring.visible     = true;
+        this.torsoMesh.position.y = this._torsoY;
+        this.headMesh.position.y  = this._headY;
+        this.legLPivot.rotation.x = this.legRPivot.rotation.x = 0;
+        this.armLPivot.rotation.x = this.armRPivot.rotation.x = 0;
+        this._computePath(this.wanderTarget.x, this.wanderTarget.z);
+      }
+      return;
+    }
+
     if (taskDef) {
       const xz = taskDef.spots[this.index % taskDef.spots.length];
       this.taskTarget   = new THREE.Vector3(xz[0], this.floorY, xz[1]);
       this.taskDuration = taskDef.ms;
       this.taskTimer    = 0;
-      this.isSitting    = taskDef.sit    ?? false;
+      this.isSitting    = taskDef.sit      ?? false;
       this.isAtComputer = taskDef.computer ?? false;
+      this._taskSeatY   = taskDef.seatY    ?? 0;
+      this._walkTimer   = 0;
       this.state        = 'WALKING_TO_TASK';
+      this._computePath(xz[0], xz[1]);
     }
   }
 
-  // ─── Furniture rearrangement ───────────────────────────────────────────────
+  // ─── Pathfinding helper ───────────────────────────────────────────────────
 
-  tryRearrangeFurniture() {
-    const { furnitureMeshes, furnitureAnimations, getDragTarget } = this._ctx;
-    const myItems = furnitureMeshes.filter(f => f.floorIndex === this.floorIndex);
-    if (myItems.length === 0) return;
+  _computePath(targetX, targetZ) {
+    const path = findPath(
+      this.floorIndex,
+      this.group.position.x, this.group.position.z,
+      targetX, targetZ,
+    );
+    this._path    = path ?? [{ x: targetX, z: targetZ }];
+    this._pathIdx = 0;
+  }
 
-    const item = myItems[Math.floor(Math.random() * myItems.length)];
-    if (furnitureAnimations.some(a => a.model === item.model)) return;
-    if (getDragTarget() === item.model) return;
-
-    const half = FLOOR_SIZE / 2 - 1.5;
-    let nx = (Math.random() - 0.5) * half * 2;
-    let nz = (Math.random() - 0.5) * half * 2;
-    if (Math.abs(nx) < 2.6 && Math.abs(nz) < 2.6) nx = nx < 0 ? -3.5 : 3.5;
-
-    furnitureAnimations.push({
-      model:  item.model,
-      target: new THREE.Vector3(nx, item.model.position.y, nz),
-    });
+  _currentWaypoint() {
+    if (this._pathIdx < this._path.length) return this._path[this._pathIdx];
+    return null;
   }
 
   // ─── Per-frame update ─────────────────────────────────────────────────────
 
   update(delta, ts) {
-    const WALK_SPEED = 1.8;
+    const WALK_SPEED = 6.0;
 
     if (this.state === 'WANDER') {
       this.wanderTimer += delta * 1000;
       if (this.wanderTimer >= this.wanderDelay) {
-        this.wanderTarget = randomWanderPoint(this.floorY);
+        this.wanderTarget = randomWanderPoint(this.floorY, this.floorIndex);
         this.wanderTimer  = 0;
         this.wanderDelay  = 3000 + Math.random() * 5000;
+        this._computePath(this.wanderTarget.x, this.wanderTarget.z);
       }
 
-      const to   = new THREE.Vector3().subVectors(this.wanderTarget, this.group.position);
-      to.y       = 0;
-      const dist = to.length();
+      const wp = this._currentWaypoint();
+      if (wp) {
+        const dx = wp.x - this.group.position.x;
+        const dz = wp.z - this.group.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
 
-      if (dist > 0.15) {
-        this.isMoving = true;
-        this.group.position.addScaledVector(to.normalize(), Math.min(WALK_SPEED * delta, dist));
+        if (dist > 0.3) {
+          this.isMoving = true;
+          const step = Math.min(WALK_SPEED * delta, dist);
+          this.group.position.x += (dx / dist) * step;
+          this.group.position.z += (dz / dist) * step;
+        } else {
+          this._pathIdx++;
+          if (this._pathIdx >= this._path.length) {
+            this.isMoving = false;
+          }
+        }
       } else {
         this.isMoving = false;
-        this.rearrangeTimer -= delta * 1000;
-        if (this.rearrangeTimer <= 0) {
-          this.rearrangeTimer = 20000 + Math.random() * 20000;
-          this.tryRearrangeFurniture();
-        }
       }
       this.group.position.y = this.floorY;
 
     } else if (this.state === 'WALKING_TO_TASK') {
-      const to   = new THREE.Vector3().subVectors(this.taskTarget, this.group.position);
-      to.y       = 0;
-      const dist = to.length();
-
-      if (dist < 0.15) {
-        this.group.position.set(this.taskTarget.x, this.floorY, this.taskTarget.z);
-        this.state            = 'DOING_TASK';
-        this.taskTimer        = 0;
-        this.isMoving         = false;
-        this.taskRing.visible = true;
-        this.ring.visible     = false;
+      this._walkTimer += delta * 1000;
+      if (this._walkTimer > 30_000) {
+        // Stuck — give up and wander
+        this.state            = 'WANDER';
+        this.taskRing.visible = false;
+        this.ring.visible     = true;
+        this.wanderTarget     = randomWanderPoint(this.floorY, this.floorIndex);
+        this.wanderTimer      = 0;
+        this.wanderDelay      = 3000 + Math.random() * 5000;
+        this._walkTimer       = 0;
+        this._path            = [];
+        this._pathIdx         = 0;
       } else {
-        this.isMoving = true;
-        this.group.position.addScaledVector(to.normalize(), Math.min(WALK_SPEED * delta, dist));
-        this.group.position.y = this.floorY;
+        const wp = this._currentWaypoint();
+        if (wp) {
+          const dx = wp.x - this.group.position.x;
+          const dz = wp.z - this.group.position.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+
+          if (dist > 0.3) {
+            this.isMoving = true;
+            const step = Math.min(WALK_SPEED * delta, dist);
+            this.group.position.x += (dx / dist) * step;
+            this.group.position.z += (dz / dist) * step;
+            this.group.position.y = this.floorY;
+          } else {
+            this._pathIdx++;
+            if (this._pathIdx >= this._path.length) {
+              // Arrived at task target
+              this.group.position.set(this.taskTarget.x, this.floorY + this._taskSeatY, this.taskTarget.z);
+              this.state            = 'DOING_TASK';
+              this.taskTimer        = 0;
+              this.isMoving         = false;
+              this.taskRing.visible = true;
+              this.ring.visible     = false;
+            }
+          }
+        } else {
+          // No path — snap directly
+          this.group.position.set(this.taskTarget.x, this.floorY + this._taskSeatY, this.taskTarget.z);
+          this.state            = 'DOING_TASK';
+          this.taskTimer        = 0;
+          this.isMoving         = false;
+          this.taskRing.visible = true;
+          this.ring.visible     = false;
+        }
       }
 
     } else if (this.state === 'DOING_TASK') {
@@ -275,51 +370,112 @@ export class SoulAvatar {
       this.taskTimer += delta * 1000;
       this.taskRing.material.opacity = 0.25 + 0.55 * (0.5 + 0.5 * Math.sin(ts * 0.004));
 
-      if (this.isSitting) {
+      if (this.isSitting || this.isAtComputer) {
+        // Sitting pose — legs bent, lowered position
+        this.legLPivot.rotation.x = -Math.PI / 2;
+        this.legRPivot.rotation.x = -Math.PI / 2;
+        if (this.isAtComputer) {
+          this.armLPivot.rotation.x = -0.45;
+          this.armRPivot.rotation.x = -0.45;
+        } else {
+          this.armLPivot.rotation.x = 0;
+          this.armRPivot.rotation.x = 0;
+        }
         const breathe = Math.sin(ts * 0.0012 + this.index * 1.5) * 0.006;
-        if (this.modelRoot) { this.modelRoot.position.y = -0.08 + breathe; this.modelRoot.rotation.x = 0.08; }
-      } else if (this.isAtComputer) {
-        if (this.modelRoot) { this.modelRoot.position.y = Math.sin(ts * 0.0008 + this.index) * 0.006; this.modelRoot.rotation.x = -0.10; }
+        this.torsoMesh.position.y = this._torsoY - 0.08 + breathe;
+        this.headMesh.position.y  = this._headY  - 0.08 + breathe;
       } else {
-        if (this.modelRoot) { this.modelRoot.position.y = Math.abs(Math.sin(ts * 0.003)) * 0.04; this.modelRoot.rotation.x = 0; }
+        // Standing task (exercise, art, etc.)
+        this.legLPivot.rotation.x = 0;
+        this.legRPivot.rotation.x = 0;
+        this.armLPivot.rotation.x = 0;
+        this.armRPivot.rotation.x = 0;
+        const bob = Math.abs(Math.sin(ts * 0.003)) * 0.04;
+        this.torsoMesh.position.y = this._torsoY + bob;
+        this.headMesh.position.y  = this._headY  + bob;
       }
 
       if (this.taskTimer >= this.taskDuration) {
         this.state            = 'WANDER';
         this.taskRing.visible = false;
         this.ring.visible     = true;
-        this.wanderTarget     = randomWanderPoint(this.floorY);
+        this.wanderTarget     = randomWanderPoint(this.floorY, this.floorIndex);
         this.wanderTimer      = 0;
         this.wanderDelay      = 8000 + Math.random() * 10000;
-        if (this.modelRoot) { this.modelRoot.position.y = 0; this.modelRoot.rotation.x = 0; }
+        this.group.position.y = this.floorY;
+        this.torsoMesh.position.y = this._torsoY;
+        this.headMesh.position.y  = this._headY;
+        this.legLPivot.rotation.x = this.legRPivot.rotation.x = 0;
+        this.armLPivot.rotation.x = this.armRPivot.rotation.x = 0;
+        this._computePath(this.wanderTarget.x, this.wanderTarget.z);
       }
       return;
     }
 
-    // Face direction of travel
+    // Face direction of travel — use current waypoint for smooth turning
     if (this.isMoving) {
-      const tgt = (this.state === 'WALKING_TO_TASK') ? this.taskTarget : this.wanderTarget;
-      const dx  = tgt.x - this.group.position.x;
-      const dz  = tgt.z - this.group.position.z;
-      this.group.rotation.y += (Math.atan2(dx, dz) - this.group.rotation.y) * 0.10;
+      const wp = this._currentWaypoint();
+      if (wp) {
+        const dx = wp.x - this.group.position.x;
+        const dz = wp.z - this.group.position.z;
+        if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+          const targetAngle = Math.atan2(dx, dz);
+          // Smooth rotation interpolation
+          let diff = targetAngle - this.group.rotation.y;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          this.group.rotation.y += diff * 0.15;
+        }
+      }
     }
 
-    // Walk animation
+    // Walk / idle animation
     if (this.isMoving) {
-      const walk = ts * 0.006;
-      const bob  = Math.abs(Math.sin(walk)) * 0.022;
-      this.torso.position.y = this._torsoY + bob;
-      if (this.legL) this.legL.rotation.x  =  Math.sin(walk) * 0.55;
-      if (this.legR) this.legR.rotation.x  = -Math.sin(walk) * 0.55;
-      if (this.modelRoot) { this.modelRoot.position.y = bob; this.modelRoot.rotation.x = 0; }
-      this.group.rotation.x = 0.05;
+      const walk = ts * 0.007;
+      const bob  = Math.abs(Math.sin(walk)) * 0.03;
+      this.legLPivot.rotation.x  =  Math.sin(walk) * 0.65;
+      this.legRPivot.rotation.x  = -Math.sin(walk) * 0.65;
+      this.armLPivot.rotation.x  = -Math.sin(walk) * 0.45;
+      this.armRPivot.rotation.x  =  Math.sin(walk) * 0.45;
+      this.torsoMesh.position.y  = this._torsoY + bob;
+      this.headMesh.position.y   = this._headY  + bob;
+      this.group.rotation.x = 0.04;
     } else {
-      const breathe = Math.sin(ts * 0.0014 + this.index * 1.5) * 0.007;
-      this.torso.position.y = this._torsoY + breathe;
-      if (this.legL) this.legL.rotation.x = 0;
-      if (this.legR) this.legR.rotation.x = 0;
-      if (this.modelRoot) { this.modelRoot.position.y = breathe; this.modelRoot.rotation.x = 0; }
+      const breathe = Math.sin(ts * 0.0014 + this.index * 1.5) * 0.006;
+      this.legLPivot.rotation.x = 0;
+      this.legRPivot.rotation.x = 0;
+      this.armLPivot.rotation.x = 0;
+      this.armRPivot.rotation.x = 0;
+      this.torsoMesh.position.y = this._torsoY + breathe;
+      this.headMesh.position.y  = this._headY  + breathe;
       this.group.rotation.x = 0;
+    }
+  }
+
+  // ─── Wall collision ────────────────────────────────────────────────────────
+
+  _applyWallCollision(prevX, prevZ) {
+    const r     = 0.6;
+    const walls = FLOOR_WALLS[this.floorIndex];
+    if (!walls) return;
+    const pos   = this.group.position;
+
+    for (const wall of walls) {
+      if (wall.axis === 'x') {
+        if (pos.z >= wall.min - r && pos.z <= wall.max + r) {
+          if (Math.abs(pos.x - wall.value) < r) {
+            const side = prevX >= wall.value ? 1 : -1;
+            pos.x = wall.value + side * r;
+          }
+        }
+      } else {
+        if (pos.x >= wall.min - r && pos.x <= wall.max + r) {
+          if (Math.abs(pos.z - wall.value) < r) {
+            const side = prevZ >= wall.value ? 1 : -1;
+            pos.z = wall.value + side * r;
+          }
+        }
+      }
     }
   }
 

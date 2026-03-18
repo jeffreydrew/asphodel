@@ -14,8 +14,9 @@ export function createWsServer(port: number): WebSocketServer {
   wss.on('connection', (ws) => {
     process.stdout.write('[WS] Client connected.\n');
 
-    // Send current world state immediately on connect
-    sendUpdate(ws);
+    sendUpdate(ws).catch(err =>
+      process.stderr.write(`[WS] sendUpdate error: ${String(err)}\n`),
+    );
 
     ws.on('close', () => {
       process.stdout.write('[WS] Client disconnected.\n');
@@ -26,18 +27,19 @@ export function createWsServer(port: number): WebSocketServer {
     });
   });
 
-  // Broadcast on every agent tick
   worldEvents.on('update', () => {
-    broadcast(wss);
+    broadcast(wss).catch(err =>
+      process.stderr.write(`[WS] broadcast error: ${String(err)}\n`),
+    );
   });
 
   return wss;
 }
 
-function broadcast(wss: WebSocketServer): void {
+async function broadcast(wss: WebSocketServer): Promise<void> {
   if (wss.clients.size === 0) return;
-  const recent_log = worldLog.getRecent(20);
-  const update     = buildWorldUpdate(recent_log);
+  const recent_log = await worldLog.getRecent(20);
+  const update     = await buildWorldUpdate(recent_log);
   const payload    = JSON.stringify(update);
 
   for (const client of wss.clients) {
@@ -47,9 +49,9 @@ function broadcast(wss: WebSocketServer): void {
   }
 }
 
-function sendUpdate(ws: WebSocket): void {
+async function sendUpdate(ws: WebSocket): Promise<void> {
   if (ws.readyState !== WebSocket.OPEN) return;
-  const recent_log = worldLog.getRecent(20);
-  const update     = buildWorldUpdate(recent_log);
+  const recent_log = await worldLog.getRecent(20);
+  const update     = await buildWorldUpdate(recent_log);
   ws.send(JSON.stringify(update));
 }

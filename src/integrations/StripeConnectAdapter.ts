@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { getDb } from '../db/client';
+import { getPool } from '../db/pgClient';
 
 const STRIPE_SECRET = process.env['STRIPE_SECRET_KEY'];
 const ENABLE_REAL   = process.env['ENABLE_REAL_MONEY'] === 'true';
@@ -17,22 +17,23 @@ export class StripeConnectAdapter {
     return ENABLE_REAL && !!STRIPE_SECRET;
   }
 
-  // Create a Stripe Connect Express account for a soul (one-time setup)
   async createAccount(soulId: string, email: string): Promise<string | null> {
     const stripe = getStripe();
     if (!stripe) return null;
 
     try {
       const account = await stripe.accounts.create({
-        type:  'express',
+        type:         'express',
         email,
         capabilities: { transfers: { requested: true } },
       });
 
-      getDb().prepare(`
-        INSERT OR IGNORE INTO stripe_accounts (soul_id, stripe_account_id, status, created_at)
-        VALUES (?, ?, 'pending', ?)
-      `).run(soulId, account.id, Date.now());
+      await getPool().query(
+        `INSERT INTO stripe_accounts (soul_id, stripe_account_id, status, created_at)
+         VALUES ($1, $2, 'pending', $3)
+         ON CONFLICT (soul_id) DO NOTHING`,
+        [soulId, account.id, Date.now()],
+      );
 
       return account.id;
     } catch (err) {
@@ -41,16 +42,17 @@ export class StripeConnectAdapter {
     }
   }
 
-  // Transfer real money to a soul's connected account
   async transfer(soulId: string, amountUsd: number, source: string): Promise<boolean> {
     if (!this.isEnabled()) return false;
 
     const stripe = getStripe();
     if (!stripe) return false;
 
-    const row = getDb()
-      .prepare('SELECT stripe_account_id FROM stripe_accounts WHERE soul_id = ?')
-      .get(soulId) as { stripe_account_id: string } | undefined;
+    const { rows } = await getPool().query(
+      'SELECT stripe_account_id FROM stripe_accounts WHERE soul_id = $1',
+      [soulId],
+    );
+    const row = rows[0] as { stripe_account_id: string } | undefined;
 
     if (!row) {
       process.stderr.write(`[Stripe] No account for soul ${soulId}\n`);
@@ -59,11 +61,11 @@ export class StripeConnectAdapter {
 
     try {
       await stripe.transfers.create({
-        amount:             Math.round(amountUsd * 100), // cents
-        currency:           'usd',
-        destination:        row.stripe_account_id,
-        transfer_group:     `asphodel_${soulId}`,
-        metadata:           { soul_id: soulId, source },
+        amount:         Math.round(amountUsd * 100),
+        currency:       'usd',
+        destination:    row.stripe_account_id,
+        transfer_group: `asphodel_${soulId}`,
+        metadata:       { soul_id: soulId, source },
       });
 
       process.stdout.write(`[Stripe] Transferred $${amountUsd.toFixed(2)} to soul ${soulId} (${source})\n`);

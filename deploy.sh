@@ -15,8 +15,10 @@ echo "▶ Syncing to $APP_SERVER..."
 rsync -avz \
   -e "ssh -i $SSH_KEY" \
   --exclude node_modules \
-  --exclude asphodel.db \
+  --exclude mnt \
   --exclude .env \
+  --exclude .git \
+  --exclude .claude \
   --exclude browser-contexts \
   --exclude '*.log' \
   . "$APP_SERVER:$APP_DIR/"

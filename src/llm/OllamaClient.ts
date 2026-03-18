@@ -28,7 +28,7 @@ export class OllamaClient {
       messages,
       stream:   false,
       format:   opts.json ? 'json' : undefined,
-      options:  { temperature: opts.temperature ?? 0.7 },
+      options:  { temperature: opts.temperature ?? 0.7, num_predict: opts.long ? 4096 : 1024 },
     };
 
     const timeout = opts.long ? CONTENT_TIMEOUT_MS : TIMEOUT_MS;

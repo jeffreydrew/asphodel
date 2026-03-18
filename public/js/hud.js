@@ -18,12 +18,27 @@ export function initHUD() {
   chatSend.addEventListener('click', sendDirective);
   chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendDirective(); });
 
+  const chatSoulSelect = document.getElementById('chat-soul-select');
+  chatSoulSelect.addEventListener('change', () => {
+    const soulId = chatSoulSelect.value;
+    const soul   = souls.find(s => s.id === soulId);
+    updateSendButton(soul?.name ?? null);
+  });
+
   // Archive panel
   document.getElementById('archive-close').addEventListener('click', closeArchive);
   document.getElementById('archive-refresh').addEventListener('click', () => loadArchive());
   document.getElementById('archive-type-filter').addEventListener('change', () => loadArchive());
   document.getElementById('archive-soul-filter').addEventListener('change', () => loadArchive());
   window.__openArchive = openArchive;
+
+  // Log panel
+  document.getElementById('log-panel-close').addEventListener('click', closeLogPanel);
+  document.getElementById('log-panel-refresh').addEventListener('click', () => loadLogPanel());
+  document.getElementById('log-sig-filter').addEventListener('change', () => loadLogPanel());
+  document.getElementById('log-soul-filter').addEventListener('change', () => loadLogPanel());
+  document.getElementById('log-time-filter').addEventListener('change', () => loadLogPanel());
+  window.__openLogPanel = openLogPanel;
 
   // Clock tick
   setInterval(updateClock, 1_000);
@@ -46,7 +61,7 @@ function updateClock() {
 // ─── Soul Cards ───────────────────────────────────────────────────────────────
 
 function renderSoulCards(souls) {
-  document.getElementById('clock-tick').textContent = `${souls.length} SOULS ACTIVE`;
+  document.getElementById('clock-tick').textContent = `${souls.length} SIMS ACTIVE`;
 
   const container = document.getElementById('soul-cards');
   souls.forEach((soul, i) => {
@@ -161,9 +176,30 @@ export function openSoulPanel(soulId) {
   renderSoulPanel(soul);
   panel.classList.add('open');
 
+  // Fetch extended data (identity, personality weights, goals)
+  fetch(`/souls/${soulId}`)
+    .then(r => r.json())
+    .then(data => {
+      const identity = typeof data.soul.identity === 'string'
+        ? JSON.parse(data.soul.identity) : data.soul.identity;
+      const weights = typeof data.soul.reward_weights === 'string'
+        ? JSON.parse(data.soul.reward_weights) : data.soul.reward_weights;
+      renderIdentity(identity);
+      renderPersonalityWeights(weights);
+    })
+    .catch(() => {});
+
+  fetch(`/souls/${soulId}/goals`)
+    .then(r => r.json())
+    .then(goals => renderGoals(goals))
+    .catch(() => {});
+
   // Pre-select soul in chat dropdown
   const select = document.getElementById('chat-soul-select');
   if (select) select.value = soulId;
+
+  // Update send button text
+  updateSendButton(soul.name);
 
   // Update card selection
   document.querySelectorAll('.soul-card').forEach(c => c.classList.remove('selected'));
@@ -174,6 +210,7 @@ function closeSoulPanel() {
   document.getElementById('soul-panel').classList.remove('open');
   selectedSoulId = null;
   document.querySelectorAll('.soul-card').forEach(c => c.classList.remove('selected'));
+  updateSendButton(null);
 }
 
 function renderSoulPanel(soul) {
@@ -257,7 +294,66 @@ function renderRecentRewards(reward) {
   }).join('');
 }
 
+function renderIdentity(identity) {
+  const bio    = document.getElementById('panel-bio');
+  const skills = document.getElementById('panel-skills');
+  if (!identity) { bio.textContent = ''; skills.innerHTML = ''; return; }
+  bio.textContent = identity.bio ?? '';
+  const tags = Array.isArray(identity.skills_public) ? identity.skills_public : [];
+  skills.innerHTML = tags.map(s => `<span class="skill-tag">${s}</span>`).join('');
+}
+
+function renderPersonalityWeights(weights) {
+  const container = document.getElementById('panel-personality');
+  if (!weights) { container.innerHTML = ''; return; }
+  const rows = [
+    { label: 'Profit drive',  key: 'w1_profit', def: 0.40 },
+    { label: 'Social drive',  key: 'w2_social', def: 0.35 },
+    { label: 'Health drive',  key: 'w3_health', def: 0.25 },
+  ];
+  container.innerHTML = rows.map(r => {
+    const val = weights[r.key] ?? r.def;
+    const pct = Math.round(val * 100);
+    return `
+      <div class="personality-row">
+        <span class="personality-label">${r.label}</span>
+        <span style="color:var(--text);font-size:10px">${pct}%</span>
+        <div class="personality-bar-track">
+          <div class="personality-bar-fill" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderGoals(goals) {
+  const container = document.getElementById('panel-goals');
+  if (!Array.isArray(goals) || goals.length === 0) {
+    container.innerHTML = '<span style="color:var(--text-dim);font-size:10px">No active goals yet.</span>';
+    return;
+  }
+  const sorted = [...goals].sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9));
+  container.innerHTML = sorted.map(g => {
+    const priCls   = `goal-priority-${Math.min(g.priority ?? 3, 3)}`;
+    let notes = '';
+    try {
+      const arr = typeof g.progress_notes === 'string' ? JSON.parse(g.progress_notes) : g.progress_notes;
+      if (Array.isArray(arr) && arr.length > 0) notes = arr[arr.length - 1];
+    } catch {}
+    return `
+      <div class="goal-item ${priCls}">
+        <div class="goal-text">${g.goal_text ?? ''}</div>
+        ${notes ? `<div class="goal-notes">${notes}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
 // ─── Chat / Directive ─────────────────────────────────────────────────────────
+
+function updateSendButton(soulName) {
+  const btn = document.getElementById('chat-send');
+  if (!btn) return;
+  btn.textContent = soulName ? `Send to ${soulName.split(' ')[0]}` : 'Send';
+}
 
 export function populateSoulSelect(soulList) {
   const select = document.getElementById('chat-soul-select');
@@ -267,10 +363,17 @@ export function populateSoulSelect(soulList) {
 
   // Also populate archive soul filter
   const archiveFilter = document.getElementById('archive-soul-filter');
-  const currentVal    = archiveFilter.value;
+  const archiveCurrent = archiveFilter.value;
   archiveFilter.innerHTML = '<option value="">All souls</option>' +
     soulList.map(s => `<option value="${s.id}">${s.name.split(' ')[0]}</option>`).join('');
-  archiveFilter.value = currentVal;
+  archiveFilter.value = archiveCurrent;
+
+  // Also populate log soul filter
+  const logFilter = document.getElementById('log-soul-filter');
+  const logCurrent = logFilter.value;
+  logFilter.innerHTML = '<option value="">All souls</option>' +
+    soulList.map(s => `<option value="${s.id}">${s.name.split(' ')[0]}</option>`).join('');
+  logFilter.value = logCurrent;
 }
 
 async function sendDirective() {
@@ -282,15 +385,120 @@ async function sendDirective() {
   const soulId  = selectedSoulId ?? select.value;
   if (!soulId) return;
 
+  const soul = souls.find(s => s.id === soulId);
+
+  // Zoom to the sim on their current floor
+  window.__zoomToSoul?.(soulId);
+
   const { sendDirective: apiSend } = await import('./api.js');
   const ok = await apiSend(soulId, message);
 
   const feedback = document.getElementById('chat-feedback');
-  feedback.textContent = ok ? `✓ Directive sent` : '✗ Failed';
+  feedback.textContent = ok ? `✓ Directive sent to ${soul?.name?.split(' ')[0] ?? 'soul'}` : '✗ Failed';
   feedback.classList.add('show');
   setTimeout(() => feedback.classList.remove('show'), 2_500);
 
   input.value = '';
+
+  if (ok && soul) {
+    processDirectiveResponse(soul, message);
+  }
+}
+
+const DIRECTIVE_FLOOR_KEYWORDS = [
+  { pattern: /\bgym\b|\bexercise\b|\bwork\s*out\b|\byoga\b/i, action: 'exercise',    floorLabel: 'GYM' },
+  { pattern: /\beat\b|\bkitchen\b|\bcook\b|\bfood\b|\blunch\b|\bdinner\b|\bbreakfast\b/i, action: 'eat', floorLabel: 'KITCHEN' },
+  { pattern: /\bsleep\b|\brest\b|\bnap\b|\bbed\b|\bbedroom\b/i, action: 'rest',       floorLabel: 'BEDROOM' },
+  { pattern: /\bwork\b|\boffice\b|\bjob\b|\bapply\b|\bapplication\b/i, action: 'browse_jobs', floorLabel: 'OFFICE' },
+  { pattern: /\bread\b|\blibrary\b|\bwrite\b|\bbook\b|\bart\b|\bresearch\b/i, action: 'read_book', floorLabel: 'LIBRARY' },
+  { pattern: /\blobby\b|\bsocial\b|\bmeet\b|\btalk\b/i, action: 'meet_soul',  floorLabel: 'LOBBY' },
+];
+
+async function processDirectiveResponse(soul, directive) {
+  const soulName = soul.name.split(' ')[0];
+
+  // Determine if directive implies a floor/action change
+  let matchedAction = null;
+  let matchedFloor  = null;
+  for (const kw of DIRECTIVE_FLOOR_KEYWORDS) {
+    if (kw.pattern.test(directive)) {
+      matchedAction = kw.action;
+      matchedFloor  = kw.floorLabel;
+      break;
+    }
+  }
+
+  // Build a short LLM prompt for the soul's response
+  const identity = soul.identity
+    ? (typeof soul.identity === 'string' ? (() => { try { return JSON.parse(soul.identity); } catch { return {}; } })() : soul.identity)
+    : {};
+  const bio = identity.bio ?? '';
+
+  const prompt = [
+    `You are ${soul.name}, a resident of Asphodel Tower.`,
+    bio ? `About you: ${bio}` : '',
+    `Current vitals — energy: ${soul.vitals?.energy ?? '?'}, happiness: ${soul.vitals?.happiness ?? '?'}, hunger: ${soul.vitals?.hunger ?? '?'}.`,
+    `You just received this directive: "${directive}"`,
+    matchedFloor ? `This means you should go to the ${matchedFloor}.` : '',
+    `Respond in one short sentence (max 15 words) describing what you do next, in first person.`,
+  ].filter(Boolean).join(' ');
+
+  let responseText = null;
+  try {
+    const HTTP_BASE = location.protocol === 'https:'
+      ? location.origin
+      : `http://${location.hostname}:${window.ASPHODEL_HTTP_PORT ?? 3000}`;
+
+    const res = await fetch(`${HTTP_BASE}/llm/directive-response`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ soul_id: soul.id, prompt }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      responseText = data.response ?? null;
+    }
+  } catch { /* fall through to fallback */ }
+
+  // Fallback: generic acknowledgement
+  if (!responseText) {
+    if (matchedFloor) {
+      responseText = `Heading to the ${matchedFloor} now.`;
+    } else {
+      responseText = `Understood. I'll take care of that.`;
+    }
+  }
+
+  // Inject into world log UI immediately
+  injectDirectiveLogEntry(soul, responseText);
+
+  // Tell world.js to move the avatar to the target action/floor
+  if (matchedAction) {
+    const avatars = window.__getAvatars?.() ?? [];
+    const avatar  = avatars.find(a => a?.id === soul.id);
+    if (avatar) {
+      avatar.setFloor(matchedAction);
+      // Re-zoom after floor switch
+      setTimeout(() => window.__zoomToSoul?.(soul.id), 400);
+    }
+  }
+}
+
+function injectDirectiveLogEntry(soul, text) {
+  const container = document.getElementById('log-entries');
+  if (!container) return;
+
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `
+    <span class="log-sig NOTABLE">◆</span>
+    <span class="log-text NOTABLE">${escapeHtml(soul.name.split(' ')[0])}: ${escapeHtml(text)}</span>
+  `;
+  container.prepend(div);
+
+  while (container.children.length > 20) {
+    container.removeChild(container.lastChild);
+  }
 }
 
 // ─── Archive Panel ────────────────────────────────────────────────────────────
@@ -380,6 +588,117 @@ function formatTs(ts) {
 
 function escapeHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── Log Panel ────────────────────────────────────────────────────────────────
+
+function openLogPanel() {
+  document.getElementById('log-panel').classList.add('open');
+  populateSoulSelect(souls);
+  loadLogPanel();
+}
+
+function closeLogPanel() {
+  document.getElementById('log-panel').classList.remove('open');
+}
+
+async function loadLogPanel() {
+  const sig    = document.getElementById('log-sig-filter').value;
+  const soulId = document.getElementById('log-soul-filter').value;
+  const secs   = Number(document.getElementById('log-time-filter').value) || 0;
+  const since  = secs ? Math.floor(Date.now() / 1000) - secs : undefined;
+
+  const { getLog } = await import('./api.js');
+  const entries = await getLog({
+    significance: sig    || undefined,
+    soulId:       soulId || undefined,
+    since,
+    limit: 200,
+  });
+
+  renderLogList(entries);
+
+  // Clear reader
+  showLogReaderPlaceholder();
+}
+
+function renderLogList(entries) {
+  const list = document.getElementById('log-panel-list');
+  list.innerHTML = '';
+
+  if (!entries.length) {
+    list.innerHTML = '<div class="log-panel-empty">No log entries match the current filters.</div>';
+    return;
+  }
+
+  entries.forEach(entry => {
+    const sigChar = entry.significance === 'SIGNIFICANT' ? '★' :
+                    entry.significance === 'NOTABLE'     ? '◆' : '·';
+
+    const div = document.createElement('div');
+    div.className = 'log-panel-entry';
+    div.innerHTML = `
+      <span class="log-panel-entry-sig ${entry.significance}">${sigChar}</span>
+      <div class="log-panel-entry-body">
+        <div class="log-panel-entry-desc">${escapeHtml(truncate(entry.description, 80))}</div>
+        <div class="log-panel-entry-meta">${escapeHtml(entry.soul_name ?? '?')} · ${entry.action} · ${formatTs(entry.ts)}</div>
+      </div>
+    `;
+    div.addEventListener('click', () => {
+      document.querySelectorAll('.log-panel-entry').forEach(el => el.classList.remove('active'));
+      div.classList.add('active');
+      openLogEntry(entry);
+    });
+    list.appendChild(div);
+  });
+}
+
+function showLogReaderPlaceholder() {
+  document.getElementById('log-reader-placeholder').style.display = '';
+  document.getElementById('log-reader-sig').textContent        = '';
+  document.getElementById('log-reader-action').textContent     = '';
+  document.getElementById('log-reader-meta').textContent       = '';
+  document.getElementById('log-reader-description').textContent= '';
+  document.getElementById('log-reader-reasoning').textContent  = '';
+  document.getElementById('log-reader-generated').textContent  = '';
+}
+
+function openLogEntry(entry) {
+  document.getElementById('log-reader-placeholder').style.display = 'none';
+
+  const sigLabels = { SIGNIFICANT: '★ SIGNIFICANT', NOTABLE: '◆ NOTABLE', ROUTINE: '· ROUTINE' };
+  const sigColors = { SIGNIFICANT: 'var(--sig)', NOTABLE: 'var(--notable)', ROUTINE: 'var(--text-dim)' };
+
+  const sigEl = document.getElementById('log-reader-sig');
+  sigEl.textContent  = sigLabels[entry.significance] ?? entry.significance;
+  sigEl.style.color  = sigColors[entry.significance] ?? 'var(--text-dim)';
+
+  document.getElementById('log-reader-action').textContent =
+    `${entry.action} — ${entry.soul_name ?? '?'}`;
+
+  const ts = new Date(entry.ts * 1000).toLocaleString();
+  const reward = entry.metadata?.reward_total != null
+    ? `  ·  reward: ${Number(entry.metadata.reward_total) >= 0 ? '+' : ''}${Number(entry.metadata.reward_total).toFixed(4)}`
+    : '';
+  document.getElementById('log-reader-meta').textContent = `${ts}${reward}`;
+
+  document.getElementById('log-reader-description').textContent = entry.description ?? '';
+
+  const reasoning = entry.metadata?.reasoning;
+  const reasoningEl = document.getElementById('log-reader-reasoning');
+  if (reasoning) {
+    reasoningEl.textContent = `💭 ${reasoning}`;
+  } else {
+    reasoningEl.textContent = '';
+  }
+
+  const generated = entry.metadata?.generated_text;
+  const generatedEl = document.getElementById('log-reader-generated');
+  if (generated) {
+    generatedEl.textContent = generated;
+  } else {
+    generatedEl.textContent = '';
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

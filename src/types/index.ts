@@ -20,6 +20,9 @@ export enum ActionType {
 // Base cooldowns in ms. Multiply by COOLDOWN_SCALE env var to speed up / slow down.
 const SCALE = Number(process.env['COOLDOWN_SCALE'] ?? 1);
 
+// Story-hours: 1 story-hour = 1 real minute in dev (COOLDOWN_SCALE * 60_000 ms)
+export const STORY_HOUR_MS = 60_000 * Number(process.env['COOLDOWN_SCALE'] ?? 1);
+
 export const COOLDOWNS: Record<ActionType, number> = {
   [ActionType.BROWSE_JOBS]:    20_000  * SCALE,
   [ActionType.SUBMIT_APP]:     60_000  * SCALE,
@@ -118,7 +121,7 @@ export interface RewardHistoryRow {
   r_health: number;
   r_penalty: number;
   r_total: number;
-  action_that_caused: ActionType;
+  action_that_caused: ActionType | string;
   quirk_delta: Record<string, number> | null;
   ts: number; // Unix ms
 }
@@ -181,13 +184,15 @@ export interface WorldMilestone {
 // ─── Action ───────────────────────────────────────────────────────────────────
 
 export interface Action {
-  type: ActionType;
+  type: ActionType | string;
   payload: Record<string, unknown>;
   reasoning?: string;
+  story_hours?: number;   // how long this action takes (in story-hours)
+  description?: string;  // free-form narrative description from LLM
 }
 
 export interface ActionResult {
-  action: ActionType;
+  action: ActionType | string;
   success: boolean;
   description: string;
   profit_delta: number;
@@ -227,7 +232,7 @@ export interface Directive {
 export interface DirectiveTask {
   directive: string;            // original visitor message
   description: string;          // LLM-interpreted task description
-  relevant_actions: ActionType[]; // actions that fulfill this task
+  relevant_actions: string[];   // action labels that fulfill this task (any string)
   steps_completed: number;
   max_steps: number;
   created_at: number;           // Unix ms
@@ -250,7 +255,7 @@ export interface SoulSnapshot {
   vitals: SoulVitals;
   wallet: WalletRow;
   quirks: QuirkRecord[];
-  last_action: ActionType | null;
+  last_action: ActionType | string | null;
   last_reward: RewardComponents | null;
   is_active: boolean;
   active_task: DirectiveTask | null;
@@ -263,4 +268,76 @@ export interface WorldUpdate {
   recent_log: WorldLogEntry[];
   positions: SoulPosition[];
   tick: number;
+  world_objects: WorldObject[];
+}
+
+// ─── Goals ────────────────────────────────────────────────────────────────────
+
+export interface SoulGoal {
+  id: string;
+  soul_id: string;
+  goal_text: string;
+  formed_at: number;
+  priority: 1 | 2 | 3;
+  sub_goals: string[] | null;
+  progress_notes: string[] | null;
+  status: 'active' | 'completed' | 'abandoned';
+}
+
+// ─── Action Registry ──────────────────────────────────────────────────────────
+
+export interface RegistryAction {
+  id: string;
+  label: string;
+  description: string;
+  vitals_effect: Partial<SoulVitals>;
+  profit_delta: number;
+  social_delta: number;
+  prerequisites: string[] | null;
+  created_by: string;
+  is_collaborative: boolean;
+  min_participants: number;
+  max_participants: number;
+  created_at: number;
+}
+
+// ─── World Objects ────────────────────────────────────────────────────────────
+
+export interface WorldObject {
+  id: string;
+  type: 'furniture' | 'art' | 'note' | 'custom';
+  label: string;
+  owner_soul_id: string | null;
+  floor: number;
+  position_x: number;
+  position_y: number;
+  position_z: number;
+  properties: Record<string, unknown> | null;
+  created_by: string;
+  created_at: number;
+}
+
+// ─── Joint Ventures ───────────────────────────────────────────────────────────
+
+export interface JointVenture {
+  id: string;
+  initiator_id: string;
+  partner_id: string;
+  action_label: string;
+  description: string;
+  reward_split: { initiator: number; partner: number };
+  status: 'negotiating' | 'active' | 'completed' | 'rejected';
+  created_at: number;
+  completed_at: number | null;
+}
+
+export interface VentureProposal {
+  id: string;
+  venture_id: string;
+  from_soul_id: string;
+  to_soul_id: string;
+  message: string;
+  response: 'accepted' | 'counter' | 'rejected' | null;
+  counter_text: string | null;
+  ts: number;
 }

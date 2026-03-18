@@ -8,3 +8,4 @@ dist/
 .claude/
 browser-contexts/
 *.log
+mnt/

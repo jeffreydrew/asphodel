@@ -1,5 +1,7 @@
 import 'dotenv/config';
-import { getDb } from './db/client';
+import { getPool } from './db/client';
+import { applySchema } from './db/schema';
+import { runMigrations } from './db/migrate';
 import { seedSouls } from './db/seed';
 import { Soul } from './soul/Soul';
 import { runAgentLoop } from './soul/AgentLoop';
@@ -11,13 +13,16 @@ const WS_PORT   = Number(process.env['WS_PORT'] ?? 3001);
 
 async function main(): Promise<void> {
   // Boot DB + schema
-  getDb();
+  const pool = getPool();
+  await applySchema(pool);
+  await runMigrations(pool);
   process.stdout.write('[boot] Database ready.\n');
 
   // Seed souls if none exist
-  const soulCount = (getDb().prepare('SELECT COUNT(*) as count FROM souls').get() as { count: number }).count;
+  const { rows } = await pool.query<{ count: string }>('SELECT COUNT(*) as count FROM souls');
+  const soulCount = Number(rows[0]?.count ?? 0);
   if (soulCount === 0) {
-    seedSouls();
+    await seedSouls();
     process.stdout.write('[boot] Seeded 5 souls.\n');
   } else {
     process.stdout.write(`[boot] Found ${soulCount} existing souls.\n`);
@@ -28,11 +33,11 @@ async function main(): Promise<void> {
   createWsServer(WS_PORT);
 
   // Load and run all active souls in parallel
-  const souls = Soul.loadAll();
+  const souls = await Soul.loadAll();
   process.stdout.write(`[boot] Starting ${souls.length} agent loop(s)...\n`);
 
   // Each soul knows who its neighbours are (everyone else by first name)
-  const allNames = souls.map(s => s.name.split(' ')[0]);
+  const allNames = souls.map(s => s.name.split(' ')[0] ?? s.name);
   await Promise.all(souls.map((soul, i) => {
     const neighbours = allNames.filter((_, j) => j !== i);
     return runAgentLoop(soul, i, neighbours);

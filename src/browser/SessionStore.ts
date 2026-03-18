@@ -1,61 +1,73 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db/client';
+import { getPool } from '../db/pgClient';
 import type { BrowserSessionRow, SessionStatus } from '../types';
 
 export class SessionStore {
-  upsert(soulId: string, platform: string, updates: Partial<BrowserSessionRow> = {}): void {
-    const db = getDb();
-    const now = Date.now();
+  async upsert(
+    soulId: string,
+    platform: string,
+    updates: Partial<BrowserSessionRow> = {},
+  ): Promise<void> {
+    const pool = getPool();
+    const now  = Date.now();
 
-    const existing = db
-      .prepare('SELECT * FROM browser_sessions WHERE soul_id = ? AND platform = ?')
-      .get(soulId, platform) as BrowserSessionRow | undefined;
+    const { rows } = await pool.query(
+      'SELECT * FROM browser_sessions WHERE soul_id = $1 AND platform = $2',
+      [soulId, platform],
+    );
+    const existing = rows[0] as BrowserSessionRow | undefined;
 
     if (!existing) {
-      db.prepare(`
-        INSERT INTO browser_sessions (id, soul_id, platform, session_cookie, last_active,
-          tasks_completed, abstract_earned_here, status)
-        VALUES (?, ?, ?, ?, ?, 0, 0.0, 'active')
-      `).run(uuidv4(), soulId, platform, null, now);
+      await pool.query(
+        `INSERT INTO browser_sessions
+           (id, soul_id, platform, session_cookie, last_active, tasks_completed, abstract_earned_here, status)
+         VALUES ($1, $2, $3, null, $4, 0, 0.0, 'active')`,
+        [uuidv4(), soulId, platform, now],
+      );
     } else {
-      const fields: string[] = ['last_active = ?'];
+      let paramCount = 1;
+      const fields: string[] = [`last_active = $${paramCount++}`];
       const values: (string | number | null)[] = [now];
 
       if (updates.tasks_completed !== undefined) {
-        fields.push('tasks_completed = tasks_completed + ?');
+        fields.push(`tasks_completed = tasks_completed + $${paramCount++}`);
         values.push(updates.tasks_completed);
       }
       if (updates.abstract_earned_here !== undefined) {
-        fields.push('abstract_earned_here = abstract_earned_here + ?');
+        fields.push(`abstract_earned_here = abstract_earned_here + $${paramCount++}`);
         values.push(updates.abstract_earned_here);
       }
       if (updates.status) {
-        fields.push('status = ?');
+        fields.push(`status = $${paramCount++}`);
         values.push(updates.status);
       }
 
       values.push(soulId, platform);
-      db.prepare(`UPDATE browser_sessions SET ${fields.join(', ')} WHERE soul_id = ? AND platform = ?`)
-        .run(...values);
+      await pool.query(
+        `UPDATE browser_sessions SET ${fields.join(', ')} WHERE soul_id = $${paramCount++} AND platform = $${paramCount}`,
+        values,
+      );
     }
   }
 
-  get(soulId: string, platform: string): BrowserSessionRow | null {
-    return (
-      (getDb()
-        .prepare('SELECT * FROM browser_sessions WHERE soul_id = ? AND platform = ?')
-        .get(soulId, platform) as BrowserSessionRow | undefined) ?? null
+  async get(soulId: string, platform: string): Promise<BrowserSessionRow | null> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM browser_sessions WHERE soul_id = $1 AND platform = $2',
+      [soulId, platform],
     );
+    return (rows[0] as BrowserSessionRow | undefined) ?? null;
   }
 
-  getAllForSoul(soulId: string): BrowserSessionRow[] {
-    return getDb()
-      .prepare('SELECT * FROM browser_sessions WHERE soul_id = ?')
-      .all(soulId) as BrowserSessionRow[];
+  async getAllForSoul(soulId: string): Promise<BrowserSessionRow[]> {
+    const { rows } = await getPool().query(
+      'SELECT * FROM browser_sessions WHERE soul_id = $1',
+      [soulId],
+    );
+    return rows as BrowserSessionRow[];
   }
 
-  setSuspended(soulId: string, platform: string): void {
-    this.upsert(soulId, platform, { status: 'suspended' as SessionStatus });
+  async setSuspended(soulId: string, platform: string): Promise<void> {
+    await this.upsert(soulId, platform, { status: 'suspended' as SessionStatus });
   }
 }
 

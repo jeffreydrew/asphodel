@@ -1,4 +1,4 @@
-import { ActionType, Significance } from '../types';
+import { Significance } from '../types';
 import type { ActionResult } from '../types';
 import type { Soul } from '../soul/Soul';
 import { ghostPublisher } from './GhostPublisher';
@@ -9,7 +9,7 @@ import { worldAccount } from './WorldAccount';
 export class IntegrationDispatcher {
   async dispatch(
     soul: Soul,
-    actionType: ActionType,
+    actionType: string,
     significance: Significance,
     generatedText: string | undefined,
     result: ActionResult,
@@ -18,7 +18,7 @@ export class IntegrationDispatcher {
 
     // Ghost: publish content when soul creates something with LLM text
     if (
-      actionType === ActionType.CREATE_CONTENT &&
+      /create_content|write_book|publish/.test(actionType) &&
       generatedText &&
       ghostPublisher.isConfigured()
     ) {
@@ -28,22 +28,21 @@ export class IntegrationDispatcher {
       tasks.push(ghostPublisher.publish(soul.id, soul.identity, title, body));
     }
 
-    // Twitter: post when social_post action has generated text
+    // Twitter: post when social action has generated text
     if (
-      actionType === ActionType.SOCIAL_POST &&
+      /social_post|tweet|post/.test(actionType) &&
       generatedText &&
       twitterClient.isConfigured(soul.identity.full_name)
     ) {
       tasks.push(twitterClient.tweet(soul.id, soul.identity, generatedText));
     }
 
-    // Reddit: post when social_post has generated text (alternates with Twitter)
+    // Reddit: post when social action has generated text (alternates with Twitter)
     if (
-      actionType === ActionType.SOCIAL_POST &&
+      /social_post|tweet|post/.test(actionType) &&
       generatedText &&
       redditClient.isConfigured(soul.identity.full_name)
     ) {
-      // Alternate: post to Reddit on even ticks
       const { tick } = soul;
       if (tick % 2 === 0) {
         tasks.push(redditClient.post(soul.id, soul.identity, generatedText));

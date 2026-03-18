@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db/client';
+import { getPool } from '../db/pgClient';
 import type { SoulIdentity } from '../types';
 
 const GHOST_URL = process.env['GHOST_URL'];
@@ -48,9 +48,9 @@ export class GhostPublisher {
         body: JSON.stringify({
           posts: [{
             title,
-            html:       htmlBody,
-            status:     'published',
-            tags:       [{ name: tag }],
+            html:           htmlBody,
+            status:         'published',
+            tags:           [{ name: tag }],
             custom_excerpt: bodyText.substring(0, 150),
           }],
         }),
@@ -69,10 +69,11 @@ export class GhostPublisher {
       const url    = post?.url ?? null;
 
       if (postId) {
-        getDb().prepare(`
-          INSERT INTO ghost_posts (id, soul_id, ghost_post_id, title, url, ts)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(uuidv4(), soulId, postId, title, url, Date.now());
+        await getPool().query(
+          `INSERT INTO ghost_posts (id, soul_id, ghost_post_id, title, url, ts)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uuidv4(), soulId, postId, title, url, Date.now()],
+        );
       }
 
       process.stdout.write(`[Ghost] Published: "${title}" → ${url}\n`);

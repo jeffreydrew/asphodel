@@ -4,35 +4,33 @@
 
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { FLOORS, FLOOR_SIZE, WALL_HEIGHT, ELEV_X, ELEV_Z } from './constants.js';
+import { FLOORS, FLOOR_SIZE, WALL_HEIGHT } from './constants.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function buildTower(scene, floorGroups) {
   FLOORS.forEach((floor, i) => buildFloor(scene, floorGroups, floor, i));
 
-  buildElevator(scene);
-
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(100, 100),
-    new THREE.MeshLambertMaterial({ color: 0x040410 }),
+    new THREE.PlaneGeometry(500, 500),
+    new THREE.MeshBasicMaterial({ color: 0xd8e8f0 }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.5;
   scene.add(ground);
 
-  const grid = new THREE.GridHelper(100, 100, 0x0f0f28, 0x08081a);
+  const grid = new THREE.GridHelper(500, 500, 0xaac0d8, 0xc0d4e8);
   grid.position.y = -0.48;
   scene.add(grid);
 }
 
 export function setupLights(scene) {
-  scene.add(new THREE.AmbientLight(0x303060, 2.5));
-  const moon = new THREE.DirectionalLight(0x8090c0, 1.2);
-  moon.position.set(-15, 40, -20);
-  scene.add(moon);
-  scene.add(new THREE.HemisphereLight(0x2030a0, 0x0a0820, 0.8));
-  const baseGlow = new THREE.PointLight(0x2050ff, 40, 30, 1.5);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  sun.position.set(-15, 40, -20);
+  scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0xc8e8ff, 0xc8d8c0, 0.8));
+  const baseGlow = new THREE.PointLight(0xffd4a0, 20, 80);
   baseGlow.position.set(0, -0.2, 0);
   scene.add(baseGlow);
 }
@@ -49,7 +47,7 @@ function buildFloor(scene, floorGroups, floor, index) {
 
   // Slab
   const slabGeo = new THREE.BoxGeometry(FLOOR_SIZE, 0.28, FLOOR_SIZE);
-  const slabMat = new THREE.MeshLambertMaterial({ color: floor.floorColor });
+  const slabMat = new THREE.MeshBasicMaterial({ color: floor.floorColor });
   const slab    = new THREE.Mesh(slabGeo, slabMat);
   slab.position.set(0, floor.y - 0.14, 0);
   group.add(slab);
@@ -63,33 +61,41 @@ function buildFloor(scene, floorGroups, floor, index) {
 
   buildFloorWalls(floor.y, index, group);
 
-  // Ceiling light fixture
-  const fix = new THREE.Mesh(
-    new THREE.BoxGeometry(1.6, 0.1, 1.6),
-    new THREE.MeshBasicMaterial({ color: floor.lightColor }),
-  );
-  fix.position.set(0, floor.y + WALL_HEIGHT - 0.05, 0);
-  group.add(fix);
-
-  // Corner accent panels
-  for (const [cx, cz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
-    const accent = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.08, 0.4),
+  // Ceiling light fixtures — 3×3 grid
+  const fixturePositions = [
+    [0, 0], [-28, -28], [0, -28], [28, -28],
+    [-28, 0],            [28, 0],
+    [-28, 28], [0, 28],  [28, 28],
+  ];
+  for (const [fx, fz] of fixturePositions) {
+    const fix = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 0.1, 1.6),
       new THREE.MeshBasicMaterial({ color: floor.lightColor }),
     );
-    accent.position.set(cx, floor.y + WALL_HEIGHT - 0.05, cz);
-    group.add(accent);
+    fix.position.set(fx, floor.y + WALL_HEIGHT - 0.05, fz);
+    group.add(fix);
   }
 
-  // Point lights
-  const mainLight = new THREE.PointLight(floor.lightColor, floor.lightIntensity, 30, 1.5);
-  mainLight.position.set(0, floor.y + WALL_HEIGHT * 0.75, 0);
+  // Main central light — high power, wide range
+  const mainLight = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 3, 120, 1.2);
+  mainLight.position.set(0, floor.y + WALL_HEIGHT * 0.85, 0);
   group.add(mainLight);
 
-  for (const [fx, fz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
-    const fill = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 0.4, 20, 1.5);
-    fill.position.set(fx, floor.y + WALL_HEIGHT * 0.5, fz);
-    group.add(fill);
+  // 3×3 grid of fill lights (skip center — covered by main)
+  for (const fx of [-28, 0, 28]) {
+    for (const fz of [-28, 0, 28]) {
+      if (fx === 0 && fz === 0) continue;
+      const fill = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 1.5, 70, 1.2);
+      fill.position.set(fx, floor.y + WALL_HEIGHT * 0.8, fz);
+      group.add(fill);
+    }
+  }
+
+  // Edge accent lights (mid-wall, lower — add warmth near perimeter)
+  for (const [ex, ez] of [[-38, 0], [38, 0], [0, -38], [0, 38]]) {
+    const edge = new THREE.PointLight(floor.lightColor, floor.lightIntensity * 0.8, 50, 1.5);
+    edge.position.set(ex, floor.y + WALL_HEIGHT * 0.5, ez);
+    group.add(edge);
   }
 
   // Floor label (CSS2D)
@@ -106,12 +112,12 @@ function buildFloor(scene, floorGroups, floor, index) {
 function buildFloorWalls(floorY, index, group) {
   const half    = FLOOR_SIZE / 2;
   const wallY   = floorY + WALL_HEIGHT / 2;
-  const wallColors = [0x14143a, 0x14243c, 0x10203a, 0x14282c, 0x1c1030, 0x201408];
+  const wallColors = [0x5858c0, 0x4080b8, 0x3868b8, 0x389870, 0x8050b8, 0xc09050];
 
   const mat = new THREE.MeshLambertMaterial({
     color:       wallColors[index] ?? 0x14143a,
     transparent: true,
-    opacity:     0.50,
+    opacity:     0.65,
     side:        THREE.DoubleSide,
     depthWrite:  false,
   });
@@ -119,41 +125,143 @@ function buildFloorWalls(floorY, index, group) {
   const addWall = (w, h, d, x, z) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     mesh.position.set(x, wallY, z);
+    mesh.userData.isEditableWall = true;
     group.add(mesh);
   };
 
-  addWall(FLOOR_SIZE, WALL_HEIGHT, 0.2,  0,     -half); // south
-  addWall(0.2, WALL_HEIGHT, FLOOR_SIZE, -half,   0);    // west
+  // 4-sided perimeter walls
+  addWall(FLOOR_SIZE, WALL_HEIGHT, 0.2,   0, -half); // south
+  addWall(FLOOR_SIZE, WALL_HEIGHT, 0.2,   0,  half); // north
+  addWall(0.2, WALL_HEIGHT, FLOOR_SIZE, -half,  0);  // west
+  addWall(0.2, WALL_HEIGHT, FLOOR_SIZE,  half,  0);  // east
+
+  addInteriorWalls(floorY, index, group, mat);
 }
 
-// ─── Elevator ─────────────────────────────────────────────────────────────────
+// ─── Interior wall helpers ────────────────────────────────────────────────────
 
-function buildElevator(scene) {
-  const topY    = FLOORS[FLOORS.length - 1].y + WALL_HEIGHT;
-  const shaftH  = topY + 0.5;
-  const shaftMid = shaftH / 2 - 0.25;
-
-  const shaftMat = new THREE.MeshLambertMaterial({ color: 0x18183a });
-  const shaft = new THREE.Mesh(new THREE.BoxGeometry(1.1, shaftH, 1.1), shaftMat);
-  shaft.position.set(ELEV_X, shaftMid, ELEV_Z);
-  scene.add(shaft);
-
-  const trimMat = new THREE.MeshBasicMaterial({ color: 0x4466ff, transparent: true, opacity: 0.7 });
-  for (const [ox, oz] of [[-0.55, 0], [0.55, 0], [0, -0.55], [0, 0.55]]) {
-    const trim = new THREE.Mesh(new THREE.BoxGeometry(0.04, shaftH, 0.04), trimMat);
-    trim.position.set(ELEV_X + ox, shaftMid, ELEV_Z + oz);
-    scene.add(trim);
+function addWallSegment(group, wallY, x1, z1, x2, z2, mat) {
+  if (Math.abs(x2 - x1) < 0.01) {
+    // Vertical wall (along Z axis)
+    const len = Math.abs(z2 - z1);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, WALL_HEIGHT, len), mat);
+    mesh.position.set(x1, wallY, (z1 + z2) / 2);
+    mesh.userData.isEditableWall = true;
+    group.add(mesh);
+  } else {
+    // Horizontal wall (along X axis)
+    const len = Math.abs(x2 - x1);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(len, WALL_HEIGHT, 0.2), mat);
+    mesh.position.set((x1 + x2) / 2, wallY, z1);
+    mesh.userData.isEditableWall = true;
+    group.add(mesh);
   }
+}
 
-  const doorMat = new THREE.MeshBasicMaterial({ color: 0x88aaff, transparent: true, opacity: 0.5 });
-  for (const floor of FLOORS) {
-    const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.06), doorMat);
-    door.position.set(ELEV_X - 0.58, floor.y + 1.0, ELEV_Z);
-    door.userData.isElevDoor = true;
-    scene.add(door);
+function addInteriorWalls(floorY, index, group, mat) {
+  const wallY = floorY + WALL_HEIGHT / 2;
+
+  // Glass-wall material (more transparent, for meeting rooms / dividers)
+  const glassMat = new THREE.MeshLambertMaterial({
+    color:       mat.color,
+    transparent: true,
+    opacity:     0.35,
+    side:        THREE.DoubleSide,
+    depthWrite:  false,
+  });
+
+  // Elevator shaft walls (all floors): x=[24,32], z=[24,32]
+  addWallSegment(group, wallY, 24, 24, 24, 32, mat);  // west face
+  addWallSegment(group, wallY, 24, 24, 32, 24, mat);  // south face
+
+  if (index === 0) {
+    // ── LOBBY ───────────────────────────────────────────────────────────────
+    // Partial divider wall (E-W) separating West Lounge from south, at z=0
+    addWallSegment(group, wallY, -32, 0, -8, 0, mat);
+    // Partial divider wall (E-W) separating East Meeting from Waiting, at z=-16
+    addWallSegment(group, wallY, 8, -16, 24, -16, mat);
+
+  } else if (index === 1) {
+    // ── KITCHEN ─────────────────────────────────────────────────────────────
+    // Kitchen prep south wall (E-W at z=16, from west wall to x=-16)
+    addWallSegment(group, wallY, -40, 16, -16, 16, mat);
+    // Kitchen prep east wall (N-S at x=-16, from z=8 to z=16)
+    addWallSegment(group, wallY, -16, 8, -16, 16, mat);
+    // Pantry north wall (E-W at z=-16, from x=8 to east wall)
+    addWallSegment(group, wallY, 16, -16, 40, -16, mat);
+    // Pantry west wall (N-S at x=8, from south wall to z=-24), door gap z=-24..-16
+    addWallSegment(group, wallY, 8, -40, 8, -24, mat);
+
+  } else if (index === 2) {
+    // ── OFFICE ──────────────────────────────────────────────────────────────
+    // Meeting room south wall (E-W at z=8, from west wall to x=-8)
+    addWallSegment(group, wallY, -40, 8, -8, 8, mat);
+    // Meeting room east wall — solid lower (x=-8, z=8 to z=16)
+    addWallSegment(group, wallY, -8, 8, -8, 16, mat);
+    // Meeting room east wall — glass upper (x=-8, z=16 to z=20), door gap z=20..24
+    addWallSegment(group, wallY, -8, 16, -8, 20, glassMat);
+    // Library wall (N-S at x=16) with door gap z=-4..4
+    addWallSegment(group, wallY, 16, -16, 16, -4, mat);
+    addWallSegment(group, wallY, 16, 4, 16, 24, mat);
+    // Lounge/Break room divider (E-W at z=-16) with door gaps
+    addWallSegment(group, wallY, -40, -16, -12, -16, mat);
+    addWallSegment(group, wallY, -4, -16, 4, -16, mat);
+    addWallSegment(group, wallY, 12, -16, 16, -16, mat);
+
+  } else if (index === 3) {
+    // ── GYM ─────────────────────────────────────────────────────────────────
+    // Yoga zone divider (E-W at z=16, from west wall), door gap x=-8..0
+    addWallSegment(group, wallY, -40, 16, -8, 16, mat);
+    // Locker room north wall (E-W at z=-16, from x=16 to east wall)
+    addWallSegment(group, wallY, 16, -16, 40, -16, mat);
+    // Locker room west wall (N-S at x=16, from south wall to z=-24), door gap z=-24..-16
+    addWallSegment(group, wallY, 16, -40, 16, -24, mat);
+
+  } else if (index === 4) {
+    // ── BEDROOM ─────────────────────────────────────────────────────────────
+    // Apt dividing walls (N-S from z=8 to z=40)
+    addWallSegment(group, wallY, -24, 8, -24, 40, mat);  // between apt1 & apt2
+    addWallSegment(group, wallY,  -8, 8,  -8, 40, mat);  // between apt2 & apt3
+    addWallSegment(group, wallY,   8, 8,   8, 40, mat);  // between apt3 & apt4
+
+    // Hallway wall (E-W at z=8) with door gaps per apartment
+    addWallSegment(group, wallY, -40, 8, -36, 8, mat);   // apt1 left
+    addWallSegment(group, wallY, -28, 8, -24, 8, mat);   // apt1 right
+    addWallSegment(group, wallY, -24, 8, -20, 8, mat);   // apt2 left
+    addWallSegment(group, wallY, -12, 8,  -8, 8, mat);   // apt2 right
+    addWallSegment(group, wallY,  -8, 8,  -4, 8, mat);   // apt3 left
+    addWallSegment(group, wallY,   4, 8,   8, 8, mat);   // apt3 right
+    addWallSegment(group, wallY,   8, 8,  12, 8, mat);   // apt4 left
+    addWallSegment(group, wallY,  20, 8,  24, 8, mat);   // apt4 right
+
+    // Apt 5 west wall (N-S at x=16, z=-16 to z=8) with door gap z=-4..4
+    addWallSegment(group, wallY, 16, -16, 16, -4, mat);
+    addWallSegment(group, wallY, 16, 4, 16, 8, mat);
+    // Apt 5 north wall connects to elevator at z=8, x=16 to x=24
+    addWallSegment(group, wallY, 16, 8, 24, 8, mat);
+
+    // Apartment ceilings (visual)
+    const ceilMat = new THREE.MeshLambertMaterial({ color: 0x7050a0 });
+    for (const cx of [-32, -16, 0, 16]) {
+      const ceil = new THREE.Mesh(new THREE.BoxGeometry(16, 0.15, 32), ceilMat);
+      ceil.position.set(cx, floorY + WALL_HEIGHT, 24);
+      group.add(ceil);
+    }
+    const ceil5 = new THREE.Mesh(new THREE.BoxGeometry(24, 0.15, 24), ceilMat);
+    ceil5.position.set(28, floorY + WALL_HEIGHT, -4);
+    group.add(ceil5);
+
+  } else if (index === 5) {
+    // ── LIBRARY ─────────────────────────────────────────────────────────────
+    // Archive room west wall (N-S at x=16) with door gap z=-4..4
+    addWallSegment(group, wallY, 16, -40, 16, -4, mat);
+    addWallSegment(group, wallY, 16, 4, 16, 24, mat);
+    // Reading nook east divider (N-S at x=-16, from south wall to z=-8)
+    addWallSegment(group, wallY, -16, -40, -16, -8, mat);
+    // Art area north wall (E-W at z=-24, x=0 to x=16) with gap x=4..8
+    addWallSegment(group, wallY, 0, -24, 4, -24, mat);
+    addWallSegment(group, wallY, 8, -24, 16, -24, mat);
+    // Art stable/station divider (N-S at x=8, from z=-40 to z=-24)
+    addWallSegment(group, wallY, 8, -40, 8, -24, mat);
   }
-
-  const glow = new THREE.PointLight(0x4466ff, 25, 8, 2);
-  glow.position.set(ELEV_X, 1.0, ELEV_Z);
-  scene.add(glow);
 }

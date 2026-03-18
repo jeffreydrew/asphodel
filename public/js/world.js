@@ -19,15 +19,17 @@ import { FLOORS, WALL_HEIGHT, FLOOR_SIZE } from './world/constants.js';
 import { buildTower, setupLights }         from './world/builders.js';
 import { loadFurniture }                   from './world/furniture.js';
 import { SoulAvatar }                      from './world/avatar.js';
+import { EditMode }                        from './world/editMode.js';
 
 // ─── Shared Scene State ───────────────────────────────────────────────────────
 
 let scene, camera, renderer, labelRenderer, controls, raycaster, mouse;
 
-const floorGroups        = [];
-const furnitureMeshes    = [];
+const floorGroups         = [];
+const furnitureMeshes     = [];
 const furnitureAnimations = [];
-const avatars            = [];
+const avatars             = [];
+const renderedObjects     = new Map(); // id → THREE.Mesh
 
 let worldData   = null;
 let selectedId  = null;
@@ -35,6 +37,7 @@ let activeFloor = -1;
 let cameraTargetY = 10;
 let dragTarget  = null;
 let didDrag     = false;
+let editMode    = null;
 
 const gltfLoader   = new GLTFLoader();
 const _dragPlane   = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -44,8 +47,8 @@ const _dragIntersect = new THREE.Vector3();
 
 export function init() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x05050e);
-  scene.fog = new THREE.FogExp2(0x05050e, 0.007);
+  scene.background = new THREE.Color(0xc8e0f0);
+  scene.fog = new THREE.FogExp2(0xc8e0f0, 0.004);
 
   buildTower(scene, floorGroups);
   setupLights(scene);
@@ -68,7 +71,23 @@ export function init() {
   connect();
   initHUD();
   initFloorFilter();
+
+  editMode = new EditMode({
+    scene,
+    camera,
+    renderer,
+    controls,
+    floorGroups,
+    furnitureMeshes,
+    gltfLoader,
+    getActiveFloor: () => activeFloor,
+  });
+
   animate();
+
+  // Expose zoom for hud.js directive handling
+  window.__zoomToSoul = zoomToSoul;
+  window.__getAvatars = () => avatars;
 }
 
 // ─── Camera & Controls ────────────────────────────────────────────────────────
@@ -134,6 +153,7 @@ function setActiveFloor(floorIdx) {
     group.visible = floorIdx === -1 || i === floorIdx;
   });
   cameraTargetY = floorIdx === -1 ? 10 : FLOORS[floorIdx].y + WALL_HEIGHT / 2;
+  editMode?.updateGrid();
   avatars.forEach(a => {
     if (!a) return;
     a.group.visible = floorIdx === -1 || a.floorIndex === floorIdx;
@@ -168,8 +188,46 @@ function handleUpdate(data) {
   data.recent_log.forEach(e => prevLogIds.add(e.id));
   if (prevLogIds.size > 200) prevLogIds = new Set([...prevLogIds].slice(-100));
 
+  renderWorldObjects(data.world_objects ?? []);
+
   populateSoulSelect(data.souls);
   updateHUD(data);
+}
+
+// ─── World Objects Renderer ───────────────────────────────────────────────────
+
+function renderWorldObjects(objects) {
+  const incomingIds = new Set(objects.map(o => o.id));
+
+  // Remove objects that no longer exist
+  for (const [id, mesh] of renderedObjects) {
+    if (!incomingIds.has(id)) {
+      mesh.parent?.remove(mesh);
+      mesh.geometry?.dispose();
+      renderedObjects.delete(id);
+    }
+  }
+
+  // Add new objects
+  for (const obj of objects) {
+    if (renderedObjects.has(obj.id)) continue;
+
+    const color = obj.properties?.color ?? '#88aaff';
+    const geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color) });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(obj.position_x, obj.position_y + 0.2, obj.position_z);
+    mesh.castShadow = true;
+
+    const floorGroup = floorGroups[obj.floor];
+    if (floorGroup) {
+      floorGroup.add(mesh);
+    } else {
+      scene.add(mesh);
+    }
+
+    renderedObjects.set(obj.id, mesh);
+  }
 }
 
 // ─── Pointer / Drag Interaction ───────────────────────────────────────────────
@@ -192,6 +250,7 @@ function collectFurnMeshes() {
 
 function onPointerDown(e) {
   if (e.button !== 0) return;
+  if (editMode?.enabled) return; // edit mode handles its own pointer events
   didDrag = false;
 
   raycaster.setFromCamera(getNDC(e), camera);
@@ -214,6 +273,7 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  if (editMode?.enabled) return;
   if (!dragTarget) {
     raycaster.setFromCamera(getNDC(e), camera);
     if (furnitureMeshes.length > 0) {
@@ -242,6 +302,7 @@ function onPointerUp() {
 }
 
 function onClick(event) {
+  if (editMode?.enabled) return;
   if (didDrag) { didDrag = false; return; }
 
   mouse.set(
@@ -261,6 +322,39 @@ function onClick(event) {
       openSoulPanel(soulId);
     }
   }
+}
+
+// ─── Zoom to Soul ─────────────────────────────────────────────────────────────
+
+export function zoomToSoul(soulId) {
+  const avatar = avatars.find(a => a?.id === soulId);
+  if (!avatar) return;
+
+  // Switch floor filter to show this soul's floor
+  const floorIdx = avatar.floorIndex;
+  setActiveFloor(floorIdx);
+  document.querySelectorAll('.floor-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`.floor-btn[data-floor="${floorIdx}"]`);
+  if (btn) btn.classList.add('active');
+
+  // Zoom camera target to the avatar's XZ position
+  const pos = avatar.group.position;
+  controls.target.set(pos.x, pos.y + 1, pos.z);
+  cameraTargetY = pos.y + 1;
+
+  // Zoom in by reducing orthographic frustum size
+  const targetD = 14;
+  const currentD = Math.abs(camera.top);
+  if (currentD > targetD) {
+    const aspect = window.innerWidth / window.innerHeight;
+    camera.top    =  targetD;
+    camera.bottom = -targetD;
+    camera.left   = -targetD * aspect;
+    camera.right  =  targetD * aspect;
+    camera.updateProjectionMatrix();
+  }
+
+  controls.update();
 }
 
 // ─── Animation Loop ───────────────────────────────────────────────────────────
