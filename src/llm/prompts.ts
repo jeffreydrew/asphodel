@@ -1,5 +1,5 @@
 import { ActionType } from '../types';
-import type { SoulVitals, SoulIdentity, RewardWeights, QuirkRecord, RewardComponents, WalletRow, DirectiveTask, SoulGoal, RegistryAction } from '../types';
+import type { SoulVitals, SoulIdentity, RewardWeights, QuirkRecord, RewardComponents, WalletRow, DirectiveTask, SoulGoal, RegistryAction, ConversationMessage } from '../types';
 
 // ─── Sovereign Identity Preamble ──────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ Your motivations (reward weights):
   Profit: ${(weights.w1_profit * 100).toFixed(0)}%, Social: ${(weights.w2_social * 100).toFixed(0)}%, Health: ${(weights.w3_health * 100).toFixed(0)}%
 ${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${taskSection}${wildcardLine}${newDirectiveLine}
 What will you do next? Consider your vitals, your goal, your memories, your neighbours.
+Commit fully to what you choose — don't flit between activities. If you start something, see it through.
 
 Respond ONLY with JSON — no prose before or after:
 {"action":"snake_case_label","description":"one sentence of what you do and why","hours":N,"reasoning":"internal monologue"}
@@ -122,8 +123,16 @@ Respond ONLY with JSON — no prose before or after:
 Rules:
 - action: lowercase snake_case, any label you choose (eat, sleep, write_manifesto, teach_yoga, stare_at_rain, anything)
 - description: what a camera would see + why you're doing it
-- hours: how many story-hours this takes (1–8; biological needs cap at 2)
-- reasoning: your private thoughts (not shown to others)`;
+- hours: how many story-hours this takes — be realistic:
+    sleep/rest: 6–8 hours (you need a full night)
+    focused work (writing, coding, creating, jobs): 2–4 hours
+    exercise/gym: 1–2 hours
+    eating/cooking: 1 hour
+    socializing/meeting someone: 1–2 hours
+    reading/browsing/research: 1–3 hours
+    idle/walk/meditate: 1 hour
+- reasoning: your private thoughts (not shown to others)
+- Do NOT choose idle or wander unless you genuinely have nothing to do. You are a person with goals — act on them.`;
 }
 
 // ─── Prompt 0b: Directive Interpretation ──────────────────────────────────────
@@ -450,4 +459,45 @@ ${goalLine}
 Decide: accept the proposal, counter with different terms, or reject it. Be yourself — weigh this against your values, current state, and goals.
 
 Respond ONLY in JSON: {"response": "accepted"|"counter"|"rejected", "counter_text": "<only if counter>", "reasoning": "<why>"}`;
+}
+
+// ─── Prompt 9: Conversation Turn ──────────────────────────────────────────────
+// Real-time multi-turn dialogue. Returns: { "message": "...", "done": bool }
+
+export function buildConversationTurnPrompt(params: {
+  identity: SoulIdentity;
+  quirks: QuirkRecord[];
+  otherNames: string[];
+  context: string;
+  history: ConversationMessage[];
+  turnNumber: number;
+  maxTurns: number;
+}): string {
+  const { identity, quirks, otherNames, context, history, turnNumber, maxTurns } = params;
+
+  const quirkHints = quirks
+    .filter(q => q.persisted)
+    .map(q => `- ${q.trigger}`)
+    .join('\n');
+
+  const historyLines = history.length > 0
+    ? history.map(m => `${m.soul_name}: "${m.text}"`).join('\n')
+    : '(conversation just started)';
+
+  const turnsLeft = maxTurns - turnNumber;
+  const endingHint = turnsLeft <= 2
+    ? '\nThe conversation is winding down. You can wrap up naturally. Set "done": true if it feels complete.'
+    : '';
+
+  return `You are ${identity.full_name}, having a real conversation with ${otherNames.join(' and ')} in Asphodel Tower.
+${identity.bio}
+${quirkHints ? `Your tendencies:\n${quirkHints}\n` : ''}
+Context: ${context}
+
+Conversation so far:
+${historyLines}
+
+It's your turn to speak. Be natural, conversational, and in-character. Say something genuine — react to what was said, share a thought, ask a question, joke, disagree, whatever feels right. Keep it to 1-3 sentences. Don't narrate actions, just speak.${endingHint}
+
+Respond ONLY in JSON: {"message": "<what you say>", "done": false}`;
 }

@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { onWorldUpdate, connect } from './api.js';
+import { onWorldUpdate, onSpeechBubble, connect } from './api.js';
 import { initHUD, updateHUD, openSoulPanel, populateSoulSelect } from './hud.js';
 
 import { FLOORS, WALL_HEIGHT, FLOOR_SIZE } from './world/constants.js';
@@ -68,6 +68,7 @@ export function init() {
   window.addEventListener('pointerup',   onPointerUp);
 
   onWorldUpdate(handleUpdate);
+  onSpeechBubble(handleSpeechBubble);
   connect();
   initHUD();
   initFloorFilter();
@@ -192,6 +193,17 @@ function handleUpdate(data) {
 
   populateSoulSelect(data.souls);
   updateHUD(data);
+}
+
+// ─── Speech Bubble Handler ───────────────────────────────────────────────────
+
+function handleSpeechBubble(data) {
+  const avatar = avatars.find(a => a?.id === data.soul_id);
+  if (!avatar) return;
+
+  // Determine duration: conversation messages stay longer
+  const duration = data.conversation_id ? 5000 : 4000;
+  avatar.showSpeechBubble(data.text, duration);
 }
 
 // ─── World Objects Renderer ───────────────────────────────────────────────────

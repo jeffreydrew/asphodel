@@ -341,3 +341,33 @@ export interface VentureProposal {
   counter_text: string | null;
   ts: number;
 }
+
+// ─── Conversations ───────────────────────────────────────────────────────────
+
+export interface ConversationMessage {
+  soul_id: string;
+  soul_name: string;
+  text: string;
+  ts: number;
+}
+
+export interface Conversation {
+  id: string;
+  participant_ids: string[];
+  context: string;
+  messages: ConversationMessage[];
+  status: 'active' | 'ended';
+  started_at: number;
+  ended_at: number | null;
+}
+
+// ─── Speech Bubbles (WebSocket) ──────────────────────────────────────────────
+
+export interface SpeechBubbleEvent {
+  type: 'SPEECH_BUBBLE';
+  soul_id: string;
+  soul_name: string;
+  text: string;
+  conversation_id: string | null;
+  ts: number;
+}

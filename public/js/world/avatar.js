@@ -111,6 +111,17 @@ export class SoulAvatar {
     this.label.position.y = 3.875;
     this.group.add(this.label);
 
+    // Speech bubble
+    const bubbleDiv = document.createElement('div');
+    bubbleDiv.className = 'speech-bubble';
+    bubbleDiv.id        = `bubble-${soul.id}`;
+    bubbleDiv.style.display = 'none';
+    this.bubbleEl = bubbleDiv;
+    this.bubble = new CSS2DObject(bubbleDiv);
+    this.bubble.position.y = 4.6;
+    this.group.add(this.bubble);
+    this._bubbleTimer = null;
+
     this.group.position.copy(this.wanderTarget);
 
     this._buildRobloxChar(soul);
@@ -498,5 +509,31 @@ export class SoulAvatar {
         if (origColors[i]) m.material?.color?.copy(origColors[i]);
       });
     }, 300);
+  }
+
+  // ─── Speech bubble ──────────────────────────────────────────────────────────
+
+  showSpeechBubble(text, durationMs = 6000) {
+    if (!this.bubbleEl) return;
+
+    // Truncate long text
+    const display = text.length > 100 ? text.substring(0, 97) + '…' : text;
+    this.bubbleEl.textContent = display;
+    this.bubbleEl.style.display = '';
+    this.bubbleEl.classList.remove('fade-out');
+    this.bubbleEl.classList.add('fade-in');
+
+    // Clear any existing timer
+    if (this._bubbleTimer) clearTimeout(this._bubbleTimer);
+
+    // Start fade-out before hiding
+    this._bubbleTimer = setTimeout(() => {
+      this.bubbleEl.classList.remove('fade-in');
+      this.bubbleEl.classList.add('fade-out');
+      setTimeout(() => {
+        this.bubbleEl.style.display = 'none';
+        this.bubbleEl.classList.remove('fade-out');
+      }, 400);
+    }, durationMs);
   }
 }

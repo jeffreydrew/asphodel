@@ -65,6 +65,38 @@ body {
   color: var(--text);
 }
 
+/* ─── Speech Bubbles ─────────────────────────────────────────── */
+
+.speech-bubble {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  color: #1a1a2e;
+  font-family: var(--font);
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 5px 8px;
+  max-width: 180px;
+  word-wrap: break-word;
+  white-space: normal;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.speech-bubble.fade-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.speech-bubble.fade-out {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
 /* ─── HUD Panels ─────────────────────────────────────────────── */
 
 .panel {
@@ -1141,6 +1173,58 @@ body {
   text-align: center;
   letter-spacing: 0.06em;
   opacity: 0.85;
+}
+
+.edit-axis-step-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.edit-axis-step-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+.edit-axis-step-select {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 2px 4px;
+  cursor: pointer;
+  outline: none;
+}
+.edit-axis-grid {
+  display: grid;
+  grid-template-columns: 18px 1fr 1fr;
+  gap: 3px;
+  align-items: center;
+}
+.edit-axis-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+.edit-axis-x { color: #ff6b6b; }
+.edit-axis-y { color: #6bffb8; }
+.edit-axis-z { color: #6bb5ff; }
+.edit-axis-btn {
+  font-size: 13px;
+  padding: 3px 0;
+  text-align: center;
+}
+.edit-pos-readout {
+  margin-top: 4px;
+  font-size: 8px;
+  color: var(--text-dim);
+  opacity: 0.7;
+  letter-spacing: 0.05em;
+  text-align: center;
 }
 
 .edit-hints {

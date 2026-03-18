@@ -28,6 +28,8 @@ import { getRedis } from '../db/redisClient';
 import { embedText } from '../db/embed';
 import { integrationDispatcher } from '../integrations/IntegrationDispatcher';
 import { getRegistryActions, seedRegistry } from '../world/ActionRegistry';
+import { runConversation, isInConversation, emitNarrationBubble } from './ConversationLoop';
+import type { ConversationParticipant } from './ConversationLoop';
 import { randomUUID } from 'crypto';
 
 const REFLECTION_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes real time
@@ -103,6 +105,12 @@ export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: st
 
   while (soul.is_active) {
     try {
+      // Skip decision-making if currently in a real-time conversation
+      if (isInConversation(soul.id)) {
+        await sleep(5_000);
+        continue;
+      }
+
       const now = Date.now();
       if (now >= soul.actionEndTime) {
         // Soul is free — make a new decision
@@ -301,6 +309,18 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   // 11. Fire integrations (Ghost, Twitter, Reddit, @asphodel_tower)
   await integrationDispatcher.dispatch(soul, action.type as string, significance, generatedText, result);
 
+  // 11b. Emit speech bubble for narration / trigger real-time conversation
+  if (generatedText && llmOnline) {
+    const shortText = generatedText.substring(0, 120);
+    if (/meet_soul|socialize|meet_/.test(label) && neighbours.length > 0) {
+      // Trigger a real-time multi-turn conversation
+      void triggerConversation(soul, neighbours, label, generatedText).catch(() => {});
+    } else {
+      // Emit a narration bubble (soul thinking/doing aloud)
+      emitNarrationBubble(soul.id, soul.name.split(' ')[0] ?? soul.name, shortText);
+    }
+  }
+
   // 12. Update 3D position
   await updatePosition(soul.id, label, slotIndex);
 
@@ -344,7 +364,12 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   // 15. Set action end time (time-based scheduling — no sleep here)
   const hours = action.story_hours ?? 1;
   soul.setActionEndTime(Date.now() + hours * STORY_HOUR_MS);
-  log(soul.name, `action committed for ${hours} story-hour${hours !== 1 ? 's' : ''} (~${hours} min)`);
+  const realMs = hours * STORY_HOUR_MS;
+  const realMin = Math.round(realMs / 60_000);
+  const realLabel = realMin >= 60
+    ? `~${(realMin / 60).toFixed(1)}h`
+    : `~${realMin}m`;
+  log(soul.name, `action committed for ${hours} story-hour${hours !== 1 ? 's' : ''} (${realLabel} real time)`);
 }
 
 // ─── Background poll (runs while soul is busy with an action) ─────────────────
@@ -885,6 +910,63 @@ async function saveLibraryWork(
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [soulId, type, title, body || content, metadata, Date.now()],
   );
+}
+
+// ─── Phase 6: Real-time conversation trigger ────────────────────────────────
+
+async function triggerConversation(
+  soul: Soul,
+  neighbours: string[],
+  actionLabel: string,
+  initialText: string,
+): Promise<void> {
+  // Pick a conversation partner (random neighbour)
+  const partnerName = neighbours[Math.floor(Math.random() * neighbours.length)]!;
+  const pool = getPool();
+
+  const { rows: partnerRows } = await pool.query(
+    'SELECT id, name, email, identity, reward_weights FROM souls WHERE name LIKE $1 AND is_active = TRUE',
+    [`${partnerName}%`],
+  );
+  if (!partnerRows[0]) return;
+
+  const partnerRow = partnerRows[0] as Record<string, unknown>;
+  const partnerId = partnerRow['id'] as string;
+
+  // Don't start if partner is already in a conversation
+  if (isInConversation(partnerId)) return;
+
+  // Load quirks for both
+  const { rows: soulQuirks } = await pool.query(
+    'SELECT * FROM quirks WHERE soul_id = $1',
+    [soul.id],
+  );
+  const { rows: partnerQuirks } = await pool.query(
+    'SELECT * FROM quirks WHERE soul_id = $1',
+    [partnerId],
+  );
+
+  const participants: ConversationParticipant[] = [
+    {
+      id: soul.id,
+      name: soul.name,
+      identity: soul.identity,
+      quirks: soulQuirks as QuirkRecord[],
+    },
+    {
+      id: partnerId,
+      name: partnerRow['name'] as string,
+      identity: partnerRow['identity'] as import('../types').SoulIdentity,
+      quirks: partnerQuirks as QuirkRecord[],
+    },
+  ];
+
+  const context = /socialize/.test(actionLabel)
+    ? `Casual socializing in the common area of Asphodel Tower`
+    : `${soul.name.split(' ')[0]} wanted to meet ${partnerName} — ${initialText.substring(0, 100)}`;
+
+  const turns = 4 + Math.floor(Math.random() * 4); // 4-7 turns
+  await runConversation(participants, context, turns);
 }
 
 // Suppress unused import warning — JointVenture type referenced in venture flow

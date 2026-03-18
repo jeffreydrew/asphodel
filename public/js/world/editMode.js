@@ -196,6 +196,16 @@ export class EditMode {
       this._applyScaleUI(next, true);
     });
 
+    // Axis nudge buttons
+    document.querySelectorAll('.edit-axis-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const axis = btn.dataset.axis;
+        const dir  = parseFloat(btn.dataset.dir);
+        const step = parseFloat(document.getElementById('edit-axis-step').value);
+        this._nudgeSelected(axis, dir * step);
+      });
+    });
+
     // Rotate buttons
     document.getElementById('edit-rot-left').addEventListener('click', () => {
       this._rotateSelected(Math.PI / 4);
@@ -339,6 +349,7 @@ export class EditMode {
     // Show props panel
     document.getElementById('edit-props').style.display = 'block';
     this._syncScaleUI();
+    this._syncPosReadout();
   }
 
   _clearSelection() {
@@ -428,6 +439,30 @@ export class EditMode {
     const scaleVal = document.getElementById('edit-scale-value');
     slider.value = Math.min(15, Math.max(0.5, v));
     scaleVal.textContent = v.toFixed(2);
+    this._syncPosReadout();
+  }
+
+  _syncPosReadout() {
+    if (!this._selected) return;
+    const p = this._selected.position;
+    const fmt = v => v.toFixed(1);
+    const px = document.getElementById('edit-pos-x');
+    const py = document.getElementById('edit-pos-y');
+    const pz = document.getElementById('edit-pos-z');
+    if (px) px.textContent = fmt(p.x);
+    if (py) py.textContent = fmt(p.y);
+    if (pz) pz.textContent = fmt(p.z);
+  }
+
+  _nudgeSelected(axis, delta) {
+    if (!this._selected) return;
+    const oldPos = this._selected.position.clone();
+    this._selected.position[axis] += delta;
+    const newPos = this._selected.position.clone();
+    this._pushUndo({ type: 'move', data: { obj: this._selected, oldPos, newPos } });
+    if (this._selected.userData?.isEditableWall) invalidateAllNavGrids();
+    this._updateHighlight();
+    this._syncPosReadout();
   }
 
   _updateHighlight() {
@@ -917,6 +952,7 @@ export class EditMode {
         this._selected.position.x = Math.max(-half, Math.min(half, hit.x - this._dragOffset.x));
         this._selected.position.z = Math.max(-half, Math.min(half, hit.z - this._dragOffset.z));
         this._updateHighlight();
+        this._syncPosReadout();
       }
       return;
     }

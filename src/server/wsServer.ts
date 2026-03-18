@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { worldEvents, buildWorldUpdate } from '../world/WorldState';
 import { WorldLog } from '../world/WorldLog';
+import type { SpeechBubbleEvent } from '../types';
 
 const worldLog = new WorldLog();
 
@@ -33,7 +34,22 @@ export function createWsServer(port: number): WebSocketServer {
     );
   });
 
+  // Real-time speech bubble events — sent immediately, not batched
+  worldEvents.on('speech_bubble', (event: SpeechBubbleEvent) => {
+    broadcastSpeechBubble(wss, event);
+  });
+
   return wss;
+}
+
+function broadcastSpeechBubble(wss: WebSocketServer, event: SpeechBubbleEvent): void {
+  if (wss.clients.size === 0) return;
+  const payload = JSON.stringify(event);
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  }
 }
 
 async function broadcast(wss: WebSocketServer): Promise<void> {

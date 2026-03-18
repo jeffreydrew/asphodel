@@ -9,9 +9,14 @@ const WS_URL = location.protocol === 'https:'
 let ws = null;
 let reconnectTimer = null;
 const listeners = [];
+const speechListeners = [];
 
 export function onWorldUpdate(fn) {
   listeners.push(fn);
+}
+
+export function onSpeechBubble(fn) {
+  speechListeners.push(fn);
 }
 
 export function connect() {
@@ -22,6 +27,8 @@ export function connect() {
       const data = JSON.parse(e.data);
       if (data.type === 'WORLD_UPDATE') {
         listeners.forEach(fn => fn(data));
+      } else if (data.type === 'SPEECH_BUBBLE') {
+        speechListeners.forEach(fn => fn(data));
       }
     } catch { /* ignore */ }
   };

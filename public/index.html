@@ -87,6 +87,36 @@
         <button id="edit-scale-up" class="edit-small-btn" title="Scale Up (])">＋</button>
       </div>
       <div class="edit-scale-readout"><span id="edit-scale-value">3.75</span>×</div>
+
+      <div class="edit-section-label" style="margin-top:8px">POSITION</div>
+      <div class="edit-axis-step-row">
+        <span class="edit-axis-step-label">step</span>
+        <select id="edit-axis-step" class="edit-axis-step-select">
+          <option value="0.5">0.5</option>
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+          <option value="4">4</option>
+          <option value="8">8</option>
+        </select>
+      </div>
+      <div class="edit-axis-grid">
+        <span class="edit-axis-label edit-axis-x">X</span>
+        <button class="edit-small-btn edit-axis-btn" data-axis="x" data-dir="-1">－</button>
+        <button class="edit-small-btn edit-axis-btn" data-axis="x" data-dir="1">＋</button>
+
+        <span class="edit-axis-label edit-axis-y">Y</span>
+        <button class="edit-small-btn edit-axis-btn" data-axis="y" data-dir="-1">－</button>
+        <button class="edit-small-btn edit-axis-btn" data-axis="y" data-dir="1">＋</button>
+
+        <span class="edit-axis-label edit-axis-z">Z</span>
+        <button class="edit-small-btn edit-axis-btn" data-axis="z" data-dir="-1">－</button>
+        <button class="edit-small-btn edit-axis-btn" data-axis="z" data-dir="1">＋</button>
+      </div>
+      <div class="edit-pos-readout">
+        x <span id="edit-pos-x">0</span> &nbsp;
+        y <span id="edit-pos-y">0</span> &nbsp;
+        z <span id="edit-pos-z">0</span>
+      </div>
     </div>
 
     <div class="edit-hints">

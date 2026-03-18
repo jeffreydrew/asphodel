@@ -251,5 +251,17 @@ export async function applySchema(pool: Pool): Promise<void> {
       FOREIGN KEY (from_soul_id)  REFERENCES souls(id),
       FOREIGN KEY (to_soul_id)    REFERENCES souls(id)
     );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id              TEXT    PRIMARY KEY,
+      participant_ids JSONB   NOT NULL,
+      context         TEXT    NOT NULL DEFAULT '',
+      messages        JSONB   NOT NULL DEFAULT '[]',
+      status          TEXT    NOT NULL DEFAULT 'active',
+      started_at      BIGINT  NOT NULL,
+      ended_at        BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
   `);
 }
