@@ -52,7 +52,7 @@ export class SoulAvatar {
     this.floorIndex     = 0;
     this.wanderTarget   = randomWanderPoint(0, 0);
     this.wanderTimer    = Math.random() * 4000;
-    this.wanderDelay    = 3000 + Math.random() * 5000;
+    this.wanderDelay    = 20000 + Math.random() * 20000;
     this.isMoving       = false;
     this._glbMeshes     = [];
     this._ctx           = worldCtx;
@@ -199,12 +199,12 @@ export class SoulAvatar {
 
   setFloor(action) {
     this.currentAction = action;
-    const hour = new Date().getHours();
-    const isWorkHours = hour >= 9 && hour < 17;
+    const hour    = new Date().getHours();
+    const isNight = hour >= 22 || hour < 6;
 
-    const targetFloor = isWorkHours
-      ? FLOORS.find(f => f.label === 'OFFICE')
-      : (FLOORS.find(f => f.actions.includes(action)) ?? FLOORS[0]);
+    // At night, idle/wander defaults to bedroom instead of lobby
+    const effectiveAction = (isNight && (action === 'idle' || action === 'wander')) ? 'rest' : action;
+    const targetFloor = FLOORS.find(f => f.actions.includes(effectiveAction)) ?? FLOORS[0];
 
     const newIndex  = FLOORS.indexOf(targetFloor);
     const newFloorY = targetFloor.y;
@@ -225,11 +225,11 @@ export class SoulAvatar {
       this._computePath(this.wanderTarget.x, this.wanderTarget.z);
     }
 
-    if (this.state !== 'WANDER') return;
+    // Stationary actions (sleep/rest/nap) always re-snap — skip the WANDER guard
+    const isStationary = /^(rest|sleep|nap)$/.test(effectiveAction) || /^(rest|sleep|nap)$/.test(action);
+    if (!isStationary && this.state !== 'WANDER') return;
 
-    const lookupAction = (isWorkHours && action === 'meet_soul') ? 'meet_soul_office' : action;
-    let taskDef = ACTION_TASK_MAP[lookupAction] ?? ACTION_TASK_MAP[action];
-    if (!taskDef && isWorkHours) taskDef = ACTION_TASK_MAP['browse_jobs'];
+    let taskDef = ACTION_TASK_MAP[effectiveAction] ?? ACTION_TASK_MAP[action];
 
     if (!taskDef) {
       // Keyword floor fallback for novel action labels
@@ -269,8 +269,21 @@ export class SoulAvatar {
       this.isAtComputer = taskDef.computer ?? false;
       this._taskSeatY   = taskDef.seatY    ?? 0;
       this._walkTimer   = 0;
-      this.state        = 'WALKING_TO_TASK';
-      this._computePath(xz[0], xz[1]);
+
+      // Stationary high-priority actions (sleep/rest/nap) snap immediately to spot
+      const isStationary = /^(rest|sleep|nap)$/.test(effectiveAction) || /^(rest|sleep|nap)$/.test(action);
+      if (isStationary) {
+        this.group.position.set(xz[0], this.floorY + this._taskSeatY, xz[1]);
+        this.state            = 'DOING_TASK';
+        this.isMoving         = false;
+        this.taskRing.visible = true;
+        this.ring.visible     = false;
+        this._path            = [];
+        this._pathIdx         = 0;
+      } else {
+        this.state = 'WALKING_TO_TASK';
+        this._computePath(xz[0], xz[1]);
+      }
     }
   }
 
@@ -301,7 +314,7 @@ export class SoulAvatar {
       if (this.wanderTimer >= this.wanderDelay) {
         this.wanderTarget = randomWanderPoint(this.floorY, this.floorIndex);
         this.wanderTimer  = 0;
-        this.wanderDelay  = 3000 + Math.random() * 5000;
+        this.wanderDelay  = 20000 + Math.random() * 20000;
         this._computePath(this.wanderTarget.x, this.wanderTarget.z);
       }
 
@@ -336,7 +349,7 @@ export class SoulAvatar {
         this.ring.visible     = true;
         this.wanderTarget     = randomWanderPoint(this.floorY, this.floorIndex);
         this.wanderTimer      = 0;
-        this.wanderDelay      = 3000 + Math.random() * 5000;
+        this.wanderDelay      = 20000 + Math.random() * 20000;
         this._walkTimer       = 0;
         this._path            = [];
         this._pathIdx         = 0;
@@ -412,7 +425,7 @@ export class SoulAvatar {
         this.ring.visible     = true;
         this.wanderTarget     = randomWanderPoint(this.floorY, this.floorIndex);
         this.wanderTimer      = 0;
-        this.wanderDelay      = 8000 + Math.random() * 10000;
+        this.wanderDelay      = 20000 + Math.random() * 20000;
         this.group.position.y = this.floorY;
         this.torsoMesh.position.y = this._torsoY;
         this.headMesh.position.y  = this._headY;

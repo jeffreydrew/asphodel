@@ -53,7 +53,7 @@ export function init() {
 
   buildTower(scene, floorGroups);
   setupLights(scene);
-  loadFurniture(floorGroups, gltfLoader, furnitureMeshes);
+  loadFurniture(floorGroups, gltfLoader, furnitureMeshes); // async; models load in background
 
   setupCamera();
   setupRenderers();
@@ -92,6 +92,17 @@ export function init() {
   // Expose zoom for hud.js directive handling
   window.__zoomToSoul = zoomToSoul;
   window.__getAvatars = () => avatars;
+  window.__isolateFloorAndZoom = isolateFloorAndZoom;
+  window.__getAvatarStatus = (soulId) => {
+    const avatar = avatars.find(a => a?.id === soulId);
+    if (!avatar) return null;
+    return {
+      floorIndex:    avatar.floorIndex,
+      floorLabel:    FLOORS[avatar.floorIndex]?.label ?? 'LOBBY',
+      state:         avatar.state,
+      currentAction: avatar.currentAction,
+    };
+  };
 }
 
 // ─── Camera & Controls ────────────────────────────────────────────────────────
@@ -160,7 +171,10 @@ function setActiveFloor(floorIdx) {
   editMode?.updateGrid();
   avatars.forEach(a => {
     if (!a) return;
-    a.group.visible = floorIdx === -1 || a.floorIndex === floorIdx;
+    const visible = floorIdx === -1 || a.floorIndex === floorIdx;
+    a.group.visible = visible;
+    if (a.label) a.label.visible = visible;
+    if (a.bubble) a.bubble.visible = visible && a.bubbleEl?.style?.display !== 'none';
   });
 }
 
@@ -181,7 +195,10 @@ function handleUpdate(data) {
   data.souls.forEach((soul, i) => {
     if (!avatars[i]) avatars[i] = new SoulAvatar(soul, i, scene, gltfLoader, worldCtx);
     avatars[i].setFloor(soul.last_action ?? 'idle');
-    avatars[i].group.visible = activeFloor === -1 || avatars[i].floorIndex === activeFloor;
+    const visible = activeFloor === -1 || avatars[i].floorIndex === activeFloor;
+    avatars[i].group.visible = visible;
+    if (avatars[i].label) avatars[i].label.visible = visible;
+    if (avatars[i].bubble) avatars[i].bubble.visible = visible && avatars[i].bubbleEl?.style?.display !== 'none';
 
     const hasSig = data.recent_log.some(e =>
       e.soul_id === soul.id && e.significance === 'SIGNIFICANT' && !prevLogIds.has(e.id),
@@ -204,8 +221,8 @@ function handleSpeechBubble(data) {
   const avatar = avatars.find(a => a?.id === data.soul_id);
   if (!avatar) return;
 
-  // Determine duration: conversation messages stay longer
-  const duration = data.conversation_id ? 5000 : 4000;
+  // Conversation messages stay longer than narration
+  const duration = data.conversation_id ? 8000 : 5000;
   avatar.showSpeechBubble(data.text, duration);
 }
 
@@ -302,6 +319,16 @@ function onClick(event) {
       openSoulPanel(soulId);
     }
   }
+}
+
+// ─── Isolate Floor and Zoom ───────────────────────────────────────────────────
+
+function isolateFloorAndZoom(floorIdx, soulId) {
+  setActiveFloor(floorIdx);
+  document.querySelectorAll('.floor-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`.floor-btn[data-floor="${floorIdx}"]`);
+  if (btn) btn.classList.add('active');
+  if (soulId) zoomToSoul(soulId);
 }
 
 // ─── Zoom to Soul ─────────────────────────────────────────────────────────────

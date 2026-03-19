@@ -37,6 +37,7 @@ export class LLMDecider {
     registryActions?: RegistryAction[],
     tick?: number,
     soulId?: string,
+    neighbourStates?: Array<{ name: string; currentAction: string; activeGoal?: string }>,
   ): Promise<Action & { reasoning?: string }> {
     const prompt = buildDecisionPrompt({
       identity,
@@ -55,6 +56,7 @@ export class LLMDecider {
       activeGoal,
       registryActions,
       tick,
+      neighbourStates,
     });
 
     const raw = await ollama.chat(
@@ -66,11 +68,12 @@ export class LLMDecider {
       const parsed = await this.parseDecision(raw, soulId ?? identity.full_name);
       if (parsed) {
         return {
-          type:        parsed.label,
-          payload:     {},
-          reasoning:   parsed.reasoning,
-          story_hours: parsed.hours,
-          description: parsed.description,
+          type:              parsed.label,
+          payload:           {},
+          reasoning:         parsed.reasoning,
+          story_hours:       parsed.hours,
+          description:       parsed.description,
+          llm_significance:  parsed.significance,
         };
       }
     }
@@ -83,7 +86,7 @@ export class LLMDecider {
   private async parseDecision(
     raw: string,
     soulId: string,
-  ): Promise<{ label: string; reasoning: string; hours: number; description: string } | null> {
+  ): Promise<{ label: string; reasoning: string; hours: number; description: string; significance?: string } | null> {
     try {
       // Strip markdown code fences that some models wrap JSON in
       const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -110,11 +113,15 @@ export class LLMDecider {
         ? Math.max(0.25, Math.min(8, parsed['hours']))
         : 1;
 
+      const rawSig = typeof parsed['significance'] === 'string' ? parsed['significance'].toUpperCase() : '';
+      const significance = ['ROUTINE', 'NOTABLE', 'SIGNIFICANT'].includes(rawSig) ? rawSig : undefined;
+
       return {
         label,
         reasoning:   typeof parsed['reasoning']   === 'string' ? parsed['reasoning']   : '',
         description: typeof parsed['description'] === 'string' ? parsed['description'] : '',
         hours,
+        significance,
       };
     } catch {
       process.stderr.write(`[LLMDecider] JSON parse failed: ${raw.substring(0, 120)}\n`);

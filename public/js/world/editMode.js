@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { FLOORS, FLOOR_SIZE, WALL_HEIGHT, KIT } from './constants.js';
 import { invalidateAllNavGrids } from './pathfinding.js';
+import { saveFurniturePiece, deleteFurniturePiece } from './furniture.js';
 
 // ─── Furniture catalogue (subset of Kenney kit) ─────────────────────────────
 
@@ -384,6 +385,15 @@ export class EditMode {
       });
       obj.parent?.remove(obj);
       this._furnitureMeshes.splice(fIdx, 1);
+      // Persist deletion to DB
+      if (obj.userData?.furnitureId) {
+        deleteFurniturePiece(
+          obj.userData.furnitureId,
+          obj,
+          entry.floorIndex,
+          obj.userData.glbFile ?? '',
+        );
+      }
       return;
     }
 
@@ -409,6 +419,7 @@ export class EditMode {
       data: { obj: this._selected, oldRotY, newRotY: this._selected.rotation.y },
     });
     this._updateHighlight();
+    this._persistSelected();
   }
 
   _scaleSelected(newScale, pushUndo) {
@@ -426,6 +437,7 @@ export class EditMode {
       } else {
         this._pushUndo({ type: 'scale', data: { obj: this._selected, oldScale, newScale } });
       }
+      this._persistSelected();
     }
   }
 
@@ -471,6 +483,7 @@ export class EditMode {
     if (this._selected.userData?.isEditableWall) invalidateAllNavGrids();
     this._updateHighlight();
     this._syncPosReadout();
+    this._persistSelected();
   }
 
   _updateHighlight() {
@@ -982,6 +995,7 @@ export class EditMode {
           type: 'move',
           data: { obj: this._selected, oldPos, newPos },
         });
+        this._persistSelected();
       }
       if (this._selected.userData?.isEditableWall) invalidateAllNavGrids();
       this._isDragging = false;
@@ -1060,14 +1074,18 @@ export class EditMode {
     const path = KIT + item.file;
     const scale = 3.75;
     const parentGroup = this._activeGroup();
+    // Stable ID for edit-mode-added pieces: em_<file>_<timestamp>
+    const furnitureId = `em_${item.file.replace('.glb','')}_${Date.now()}`;
 
     this._gltfLoader.load(path, (gltf) => {
       const model = gltf.scene;
       model.position.set(x, floorY, z);
       model.scale.setScalar(scale);
-      model.userData.isFurniture = true;
-      model.userData.floorIndex = floorIndex;
-      model.userData.floorY = floorY;
+      model.userData.isFurniture  = true;
+      model.userData.furnitureId  = furnitureId;
+      model.userData.glbFile      = item.file;
+      model.userData.floorIndex   = floorIndex;
+      model.userData.floorY       = floorY;
 
       model.traverse(child => {
         if (child.isMesh && child.material) {
@@ -1089,7 +1107,24 @@ export class EditMode {
         data: { model, floorIndex, floorY, parentGroup },
       });
 
+      // Persist immediately so it survives refresh
+      saveFurniturePiece(furnitureId, model, floorIndex, item.file);
+
       this._selectObject(model);
     }, undefined, () => {});
+  }
+
+  /** Persist the currently selected furniture piece's transform to the DB. */
+  _persistSelected() {
+    const obj = this._selected;
+    if (!obj?.userData?.furnitureId) return;
+    const fEntry = this._furnitureMeshes.find(f => f.model === obj);
+    const floorIndex = fEntry?.floorIndex ?? obj.userData.floorIndex ?? 0;
+    saveFurniturePiece(
+      obj.userData.furnitureId,
+      obj,
+      floorIndex,
+      obj.userData.glbFile ?? '',
+    );
   }
 }

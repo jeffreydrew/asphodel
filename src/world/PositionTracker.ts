@@ -3,6 +3,12 @@ import type { SoulPosition } from '../types';
 
 function inferFloor(label: string): number {
   const l = label.toLowerCase();
+
+  // At night, idle/wandering defaults to bedroom
+  const hour    = new Date().getHours();
+  const isNight = hour >= 22 || hour < 6;
+  if (isNight && /idle|wander|rest|sleep|nap/.test(l)) return 18.6; // BEDROOM
+
   if (/rest|sleep|nap|dream|meditat/.test(l))          return 18.6; // BEDROOM
   if (/eat|cook|hunger|food|kitchen/.test(l))           return 5.1;  // KITCHEN
   if (/work|job|apply|browse_job|submit/.test(l))       return 9.6;  // OFFICE

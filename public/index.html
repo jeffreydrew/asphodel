@@ -39,6 +39,9 @@
   <!-- ── Soul Cards (top right) ───────────────────────────────── -->
   <div id="soul-cards"></div>
 
+  <!-- ── HUD Toggle (top left, above stats) ──────────────────── -->
+  <button id="hud-toggle-btn" onclick="window.__toggleHUD?.()">◈ HIDE UI</button>
+
   <!-- ── Stats Toggle (top left) ─────────────────────────────── -->
   <button id="stats-toggle-btn" onclick="window.__toggleStats?.()">◈ STATS</button>
 
@@ -147,8 +150,25 @@
 
   <!-- ── World Log (bottom left) ──────────────────────────────── -->
   <div class="panel" id="world-log">
-    <div id="world-log-title" style="cursor:pointer" onclick="window.__openLogPanel?.()">◈ WORLD LOG</div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div id="world-log-title" style="cursor:pointer" onclick="window.__openLogPanel?.()">◈ WORLD LOG</div>
+      <span id="log-routine-toggle" style="cursor:pointer;font-size:9px;color:var(--text-dim);user-select:none" onclick="window.__toggleRoutine?.()">show routine</span>
+    </div>
+    <div id="thought-stream"></div>
+    <hr class="log-divider" />
     <div id="log-entries"></div>
+  </div>
+
+  <!-- ── Sim Status Widget (below world log) ──────────────────── -->
+  <div class="panel" id="sim-status-panel">
+    <div class="sim-status-title">◈ SIM STATUS</div>
+    <div id="sim-status-list"></div>
+  </div>
+
+  <!-- ── Conversation Feed (bottom right) ─────────────────────── -->
+  <div class="panel" id="conversation-feed-panel">
+    <div class="voices-title">◈ VOICES</div>
+    <div id="conversation-feed"></div>
   </div>
 
   <!-- ── Milestone Banner (centre flash) ──────────────────────── -->
@@ -193,7 +213,7 @@
         <select id="log-sig-filter">
           <option value="">All significance</option>
           <option value="ROUTINE">Routine</option>
-          <option value="NOTABLE">Notable</option>
+          <option value="NOTABLE" selected>Notable</option>
           <option value="SIGNIFICANT">Significant</option>
         </select>
         <select id="log-soul-filter">
@@ -269,6 +289,21 @@
       <div class="panel-section-title">Identity</div>
       <div id="panel-bio" class="identity-bio"></div>
       <div id="panel-skills"></div>
+    </div>
+
+    <div class="panel-section" id="panel-backstory-section" style="display:none">
+      <div class="panel-section-title">Backstory</div>
+      <div id="panel-backstory" class="identity-backstory"></div>
+    </div>
+
+    <div class="panel-section" id="panel-ambitions-section" style="display:none">
+      <div class="panel-section-title">Ambitions</div>
+      <div id="panel-ambitions" class="identity-backstory"></div>
+    </div>
+
+    <div class="panel-section" id="panel-personality-notes-section" style="display:none">
+      <div class="panel-section-title">Character</div>
+      <div id="panel-personality-notes" class="identity-backstory"></div>
     </div>
 
     <div class="panel-section">

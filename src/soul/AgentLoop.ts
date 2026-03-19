@@ -1,5 +1,5 @@
 import { STORY_HOUR_MS, ActionType, Significance } from '../types';
-import type { DirectiveTask, SoulGoal, QuirkRecord, VentureProposal, SoulVitals, WalletRow } from '../types';
+import type { DirectiveTask, SoulGoal, QuirkRecord, VentureProposal, SoulVitals, WalletRow, SoulIdentity, ConversationMessage } from '../types';
 import { Soul } from './Soul';
 import { LLMDecider } from './LLMDecider';
 import { HardcodedDecider } from './HardcodedDecider';
@@ -10,7 +10,7 @@ import { WorldLog } from '../world/WorldLog';
 import { classifyEvent } from '../world/EventClassifier';
 import { pushSnapshot, worldEvents, invalidateObjectsCache } from '../world/WorldState';
 import { drain as drainDirectives } from '../world/DirectiveQueue';
-import { updatePosition } from '../world/PositionTracker';
+import { updatePosition, getAllPositions } from '../world/PositionTracker';
 import { ollama } from '../llm/OllamaClient';
 import { anthropicClient } from '../llm/AnthropicClient';
 import type { AnthropicContentBlock } from '../llm/AnthropicClient';
@@ -27,6 +27,7 @@ import {
   buildRegistryActionNarrationPrompt,
   buildVentureResponsePrompt,
   buildWebSearchPrompt,
+  buildWebSearchSynthesisPrompt,
   buildCodeReadPrompt,
   buildCodeWritePrompt,
   buildAIConsultPrompt,
@@ -161,7 +162,20 @@ export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: st
       } else {
         // Soul is busy — run background tasks while waiting
         await backgroundPoll(soul, slotIndex, neighbours);
-        await sleep(30_000);
+
+        // Poll every 5s for incoming directives — preempt current action if one arrives
+        let polled = 0;
+        while (polled < 30_000 && soul.actionEndTime > Date.now()) {
+          await sleep(5_000);
+          polled += 5_000;
+          const redis = getRedis();
+          const pending = await redis.llen(`directives:${soul.id}`);
+          if (pending > 0) {
+            soul.setActionEndTime(0); // preempt — next loop iteration runs tick() immediately
+            log(soul.name, `⚡ Directive arrived — preempting current action`);
+            break;
+          }
+        }
       }
     } catch (err) {
       log(soul.name, `Error: ${String(err)}`);
@@ -225,6 +239,9 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   // 3e. Load registry actions
   const registryActions = await getRegistryActions();
 
+  // 3f. Fetch neighbour states (current action + active goal) for prompt context
+  const neighbourStates = await fetchNeighbourStates(neighbours);
+
   // 4. Decide
   const timeOfDay = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   const action = llmOnline
@@ -233,6 +250,7 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
         wallet, quirkList, soul.last_reward, soul.last_action,
         timeOfDay, directive, neighbours, soul.active_task,
         recentMemories, wildcard, activeGoal, registryActions, soul.tick, soul.id,
+        neighbourStates,
       )
     : { ...hardcodedDecider.decide(driftedVitals, soul.reward_weights, quirkList, soul.last_reward) };
 
@@ -297,6 +315,17 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   // 5. Execute (browser → simulation fallback)
   const result = await executor.run(action, driftedVitals, soul.identity, soul.id);
 
+  // 5a. For search_web: synthesize real results into a findings document
+  if (label === 'search_web' && result.description.includes('Searched') && llmOnline) {
+    const query       = String(action.payload['searchQuery'] ?? '');
+    const rawResults  = result.description;
+    const synth = await generateSearchSynthesis(soul, query, rawResults, neighbours, systemBlocks);
+    if (synth) {
+      generatedText = synth;
+      void saveLibraryWork(soul.id, 'research', synth, { action: label, query }).catch(() => {});
+    }
+  }
+
   if (generatedText) {
     result.description = generatedText.substring(0, 200);
     result.metadata['generated_text'] = generatedText;
@@ -352,6 +381,11 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   }
 
   // 10. Classify + log event
+  // Inject LLM self-reported significance into result metadata so classifyEvent can use it
+  if (action.llm_significance) {
+    result.metadata['llm_significance'] = action.llm_significance;
+  }
+
   const walletAfter = (await soul.observe()).wallet;
   const significance = classifyEvent({
     action:       action.type as string,
@@ -359,6 +393,8 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
     wallet:       walletAfter,
     walletBefore: { balance_abstract: wallet.balance_abstract },
     rewardTotal:  reward.r_total,
+    activeGoal,
+    soulNames:    neighbours,
   });
 
   void worldLog.append({
@@ -379,6 +415,19 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
     log(soul.name, `*** SIGNIFICANT: ${result.description}`);
   } else if (significance === Significance.NOTABLE) {
     log(soul.name, `  NOTABLE: ${result.description}`);
+  }
+
+  // Update goal progress_notes when this tick is meaningful
+  if (
+    activeGoal &&
+    (significance === Significance.NOTABLE || significance === Significance.SIGNIFICANT)
+  ) {
+    const progressNote = `[${new Date().toISOString().substring(0, 10)}] ${action.type}: ${result.description.substring(0, 100)}`;
+    const existing = Array.isArray(activeGoal.progress_notes) ? (activeGoal.progress_notes as string[]) : [];
+    void getPool().query(
+      `UPDATE soul_goals SET progress_notes = $1::jsonb WHERE id = $2`,
+      [JSON.stringify([...existing, progressNote].slice(-20)), activeGoal.id],
+    ).catch(() => {});
   }
 
   // 11. Fire integrations (Ghost, Twitter, Reddit, @asphodel_tower)
@@ -484,6 +533,25 @@ async function backgroundPoll(soul: Soul, slotIndex: number, neighbours: string[
 
   const remaining = Math.max(0, soul.actionEndTime - nowMs);
   log(soul.name, `busy (${Math.round(remaining / 1000)}s remaining)`);
+
+  // Proximity conversation — ~20% chance per poll cycle
+  if (llmOnline && !isInConversation(soul.id) && Math.random() < 0.20) {
+    const FLOOR_NAMES: Record<number, string> = {
+      0: 'lobby', 1: 'kitchen', 2: 'office', 3: 'gym', 4: 'bedroom', 5: 'library',
+    };
+    try {
+      const positions = await getAllPositions();
+      const myPos = positions.find(p => p.soul_id === soul.id);
+      if (myPos) {
+        const floorIdx = myPos.y < 3 ? 0 : myPos.y < 7 ? 1 : myPos.y < 12 ? 2 : myPos.y < 16 ? 3 : myPos.y < 21 ? 4 : 5;
+        const floorName = FLOOR_NAMES[floorIdx] ?? 'common area';
+        const nearby = positions.filter(p => p.soul_id !== soul.id && Math.abs(p.y - myPos.y) < 0.5);
+        if (nearby.length > 0 && nearby[0]) {
+          void triggerProximityConversation(soul, nearby[0].soul_id, neighbours, floorName).catch(() => {});
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
   void slotIndex; // used in tick, not here
 }
@@ -746,6 +814,47 @@ async function loadActiveGoal(soulId: string): Promise<SoulGoal | null> {
   };
 }
 
+// ─── Neighbour state lookup ───────────────────────────────────────────────────
+
+async function fetchNeighbourStates(
+  names: string[],
+): Promise<Array<{ name: string; currentAction: string; activeGoal?: string }>> {
+  if (names.length === 0) return [];
+  try {
+    const pool = getPool();
+
+    // Most recent action per neighbour from world_log
+    const { rows: actionRows } = await pool.query<{ name: string; action: string }>(
+      `SELECT DISTINCT ON (s.id) s.name, wl.action
+       FROM world_log wl
+       JOIN souls s ON s.id = wl.soul_id
+       WHERE s.name = ANY($1)
+       ORDER BY s.id, wl.ts DESC`,
+      [names],
+    );
+
+    // Active goal per neighbour (highest priority)
+    const { rows: goalRows } = await pool.query<{ name: string; goal_text: string }>(
+      `SELECT DISTINCT ON (sg.soul_id) s.name, sg.goal_text
+       FROM soul_goals sg
+       JOIN souls s ON s.id = sg.soul_id
+       WHERE s.name = ANY($1) AND sg.status = 'active'
+       ORDER BY sg.soul_id, sg.priority DESC`,
+      [names],
+    );
+
+    const goalMap = new Map(goalRows.map(r => [r.name, r.goal_text]));
+
+    return actionRows.map(r => ({
+      name:          r.name,
+      currentAction: r.action,
+      activeGoal:    goalMap.get(r.name),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 async function runGoalFormation(
   soul: Soul,
   quirkList: QuirkRecord[],
@@ -891,6 +1000,40 @@ async function generateToolAction(
     process.stderr.write(`[AgentLoop] generateToolAction parse failed for ${toolType}: ${raw.substring(0, 120)}\n`);
   }
 
+  return undefined;
+}
+
+// ─── Phase 4c: Search synthesis ──────────────────────────────────────────────
+
+async function generateSearchSynthesis(
+  soul: Soul,
+  query: string,
+  rawResults: string,
+  neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
+): Promise<string | undefined> {
+  const snippetLines = rawResults.split('\n').filter(l => l.startsWith('•'));
+  const results = snippetLines.slice(0, 5).map(l => {
+    const m = l.match(/^• (.+?): (.+)$/);
+    return { title: m?.[1] ?? '', url: '', snippet: m?.[2] ?? l };
+  });
+
+  const prompt = buildWebSearchSynthesisPrompt({ identity: soul.identity, query, results, neighbours });
+  const resp = await anthropicClient.chat({
+    systemBlocks,
+    messages: [{ role: 'user', content: prompt }],
+    long: true,
+    label: 'searchSynthesis',
+    soulName: soul.name,
+  });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as { findings?: string };
+    if (parsed.findings) return `Search: ${query}\n\n${parsed.findings}`;
+  } catch { /* fall through */ }
   return undefined;
 }
 
@@ -1135,6 +1278,67 @@ async function triggerConversation(
 
   const turns = 4 + Math.floor(Math.random() * 4); // 4-7 turns
   await runConversation(participants, context, turns);
+}
+
+// ─── Proximity conversation trigger (spontaneous bump-in) ───────────────────
+
+async function triggerProximityConversation(
+  soul: Soul,
+  partnerId: string,
+  neighbours: string[],
+  floorName: string,
+): Promise<void> {
+  if (isInConversation(soul.id) || isInConversation(partnerId)) return;
+
+  const pool = getPool();
+
+  const { rows: partnerRows } = await pool.query(
+    'SELECT id, name, identity FROM souls WHERE id = $1 AND is_active = TRUE',
+    [partnerId],
+  );
+  if (!partnerRows[0]) return;
+
+  // Cooldown: skip if they talked in the last 10 minutes
+  const { rows: recentRows } = await pool.query(
+    `SELECT id FROM conversations
+     WHERE participant_ids @> $1::jsonb AND participant_ids @> $2::jsonb
+     AND started_at > $3 LIMIT 1`,
+    [JSON.stringify([soul.id]), JSON.stringify([partnerId]), Date.now() - 10 * 60_000],
+  );
+  if (recentRows.length > 0) return;
+
+  // Get last conversation snippet for anti-repetition context
+  const { rows: prevConvos } = await pool.query(
+    `SELECT messages FROM conversations
+     WHERE participant_ids @> $1::jsonb AND participant_ids @> $2::jsonb
+     AND status = 'ended' ORDER BY ended_at DESC LIMIT 1`,
+    [JSON.stringify([soul.id]), JSON.stringify([partnerId])],
+  );
+  const prevHint = prevConvos.length > 0 && prevConvos[0]
+    ? ` They've spoken before — you might naturally follow up on something from that conversation, or bring up something new. Be curious about what they've been up to.`
+    : ' This is an early encounter — introduce yourselves a bit, find common ground.';
+
+  // Load quirks for both
+  const [{ rows: soulQuirks }, { rows: partnerQuirks }] = await Promise.all([
+    pool.query('SELECT * FROM quirks WHERE soul_id = $1', [soul.id]),
+    pool.query('SELECT * FROM quirks WHERE soul_id = $1', [partnerId]),
+  ]);
+
+  const partnerRow = partnerRows[0] as Record<string, unknown>;
+  const participants: ConversationParticipant[] = [
+    { id: soul.id, name: soul.name, identity: soul.identity, quirks: soulQuirks as QuirkRecord[] },
+    {
+      id:       partnerRow['id'] as string,
+      name:     partnerRow['name'] as string,
+      identity: partnerRow['identity'] as SoulIdentity,
+      quirks:   partnerQuirks as QuirkRecord[],
+    },
+  ];
+
+  const partnerFirstName = (partnerRow['name'] as string).split(' ')[0] ?? '';
+  const context = `${soul.name.split(' ')[0]} and ${partnerFirstName} crossed paths in the ${floorName}.${prevHint}`;
+  log(soul.name, `[proximity] Bumped into ${partnerRow['name'] as string} in ${floorName}`);
+  await runConversation(participants, context, 8);
 }
 
 // Suppress unused import warning — JointVenture type referenced in venture flow

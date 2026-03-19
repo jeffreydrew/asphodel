@@ -210,7 +210,22 @@ function renderWorld(world, totals) {
     ? `$${(totals.cost / totals.calls).toFixed(5)}/call`
     : '—';
 
+  const perSoulRows = (world.thoughts_per_soul ?? [])
+    .sort((a, b) => b.count - a.count)
+    .map(s => `<div class="stats-soul-row">
+      <span class="stats-soul-name">${s.name.split(' ')[0]}</span>
+      <span class="stats-soul-val">${fmtN(s.count)} thoughts</span>
+    </div>`)
+    .join('');
+
   return `<div class="stats-section">
+    <div class="stats-section-title">◈ TOWER MIND</div>
+    ${row('Thoughts today',    `<span class="stats-hi">${fmtN(world.thoughts_24h ?? 0)}</span> across ${world.souls_active} souls`)}
+    ${row('Memories stored',   fmtN(world.memories_total ?? 0))}
+    ${row('Conversations today', fmtN(world.conversations_today ?? 0))}
+    ${perSoulRows ? `<div style="margin-top:4px">${perSoulRows}</div>` : ''}
+  </div>
+  <div class="stats-section">
     <div class="stats-section-title">WORLD</div>
     ${row('Tick',             fmtN(world.tick))}
     ${row('Souls active',     world.souls_active)}

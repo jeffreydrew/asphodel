@@ -4,7 +4,7 @@ import { getPool } from '../db/pgClient';
 import { buildWorldUpdate } from '../world/WorldState';
 import { WorldLog } from '../world/WorldLog';
 import { enqueue } from '../world/DirectiveQueue';
-import { ollama } from '../llm/OllamaClient';
+import { anthropicClient } from '../llm/AnthropicClient';
 import { usageTracker } from '../llm/UsageTracker';
 import { Significance } from '../types';
 
@@ -215,12 +215,13 @@ export function createHttpServer(port: number): void {
 
     const soul = rows[0] as { id: string; name: string };
 
-    const response = await ollama.chat([
-      { role: 'system', content: 'You are a sim resident responding to a directive. Be concise and in-character.' },
-      { role: 'user',   content: prompt.trim() },
-    ], { temperature: 0.8 });
-
-    const text = response ?? 'Understood.';
+    const resp = await anthropicClient.chat({
+      systemBlocks: [],
+      messages: [{ role: 'user', content: `You are a sim resident responding to a directive. Be concise and in-character.\n\n${prompt.trim()}` }],
+      label: 'directiveResponse',
+      soulName: soul.name,
+    });
+    const text = resp.text ?? 'Understood.';
 
     // Log to world log so it persists and appears in the live feed
     await worldLog.append({
@@ -244,11 +245,37 @@ export function createHttpServer(port: number): void {
 
     // World metrics from DB
     const pool = getPool();
-    const [soulsRes, tickRes, actionsRes] = await Promise.all([
+    const since24h = Date.now() - 86_400_000;
+    const [soulsRes, tickRes, actionsRes, thoughtsRes, memoriesRes, convoRes] = await Promise.all([
       pool.query<{ cnt: string }>('SELECT COUNT(*) as cnt FROM souls WHERE is_active = TRUE'),
       pool.query<{ tick: number }>('SELECT tick FROM souls WHERE is_active = TRUE ORDER BY tick DESC LIMIT 1'),
       pool.query<{ cnt: string }>(`SELECT COUNT(*) as cnt FROM world_log WHERE ts > $1`, [Date.now() - 3_600_000]),
+      pool.query<{ soul_id: string; name: string; cnt: string }>(
+        `SELECT rh.soul_id, s.name, COUNT(*) as cnt
+         FROM reward_history rh JOIN souls s ON s.id = rh.soul_id
+         WHERE rh.ts > $1 AND s.is_active = TRUE
+         GROUP BY rh.soul_id, s.name`,
+        [since24h],
+      ),
+      pool.query<{ soul_id: string; name: string; cnt: string }>(
+        `SELECT sm.soul_id, s.name, COUNT(*) as cnt
+         FROM soul_memory sm JOIN souls s ON s.id = sm.soul_id
+         WHERE s.is_active = TRUE
+         GROUP BY sm.soul_id, s.name`,
+      ),
+      pool.query<{ cnt: string }>(
+        `SELECT COUNT(*) as cnt FROM conversations WHERE started_at > $1`,
+        [since24h],
+      ),
     ]);
+
+    const thoughtsPerSoul = thoughtsRes.rows.map(r => ({
+      name:  r.name,
+      count: Number(r.cnt),
+    }));
+    const thoughts24h   = thoughtsPerSoul.reduce((sum, r) => sum + r.count, 0);
+    const memoriesTotal = memoriesRes.rows.reduce((sum, r) => sum + Number(r.cnt), 0);
+    const convosToday   = Number((convoRes.rows[0] as Record<string,string>)?.['cnt'] ?? 0);
 
     res.json({
       uptime_s:     Math.round(process.uptime()),
@@ -260,8 +287,68 @@ export function createHttpServer(port: number): void {
         souls_active:       Number((soulsRes.rows[0] as Record<string,string>)?.['cnt'] ?? 0),
         tick:               Number((tickRes.rows[0] as Record<string,number>)?.['tick'] ?? 0),
         actions_last_hour:  Number((actionsRes.rows[0] as Record<string,string>)?.['cnt'] ?? 0),
+        thoughts_24h:       thoughts24h,
+        thoughts_per_soul:  thoughtsPerSoul,
+        memories_total:     memoriesTotal,
+        conversations_today: convosToday,
       },
     });
+  });
+
+  // ── Furniture layout persistence ─────────────────────────────────────────
+  app.get('/furniture-layout', async (_req, res) => {
+    const { rows } = await getPool().query(
+      'SELECT * FROM furniture_layout WHERE deleted = FALSE ORDER BY floor ASC',
+    );
+    res.json(rows);
+  });
+
+  app.put('/furniture-layout/:id', async (req, res) => {
+    const furnitureId = req.params['id']!;
+    const { floor, glb_file, x, y, z, rotation_y, scale, deleted } = req.body as {
+      floor?: number;
+      glb_file?: string;
+      x?: number;
+      y?: number;
+      z?: number;
+      rotation_y?: number;
+      scale?: number;
+      deleted?: boolean;
+    };
+
+    if (floor === undefined || !glb_file) {
+      res.status(400).json({ error: 'floor and glb_file are required' });
+      return;
+    }
+
+    await getPool().query(
+      `INSERT INTO furniture_layout
+         (furniture_id, floor, glb_file, x, y, z, rotation_y, scale, deleted, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (furniture_id) DO UPDATE SET
+         floor      = EXCLUDED.floor,
+         glb_file   = EXCLUDED.glb_file,
+         x          = EXCLUDED.x,
+         y          = EXCLUDED.y,
+         z          = EXCLUDED.z,
+         rotation_y = EXCLUDED.rotation_y,
+         scale      = EXCLUDED.scale,
+         deleted    = EXCLUDED.deleted,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        furnitureId,
+        floor,
+        glb_file,
+        x ?? 0,
+        y ?? 0,
+        z ?? 0,
+        rotation_y ?? 0,
+        scale ?? 3.75,
+        deleted ?? false,
+        Date.now(),
+      ],
+    );
+    res.json({ ok: true });
   });
 
   // ── Admin: deactivate / reactivate ────────────────────────────────────────

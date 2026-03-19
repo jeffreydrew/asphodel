@@ -109,11 +109,10 @@ body {
   z-index: 10;
 }
 
-/* World Clock — top centre */
+/* World Clock — top right */
 #world-clock {
   top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 12px;
   text-align: center;
   min-width: 200px;
 }
@@ -136,9 +135,9 @@ body {
   margin-top: 2px;
 }
 
-/* Soul Cards — top right */
+/* Soul Cards — top right, below world clock */
 #soul-cards {
-  top: 12px;
+  top: 96px;
   right: 12px;
   width: 220px;
   display: flex;
@@ -207,13 +206,90 @@ body {
 
 #panel-wallet { color: var(--accent); }
 
-/* World Log — bottom left */
+/* World Log — bottom left, shifted up to make room for sim-status below */
 #world-log {
-  bottom: 52px;
+  bottom: 214px;
   left: 12px;
   width: 300px;
   max-height: 240px;
   overflow: hidden;
+}
+
+/* Sim Status Widget — directly below world log */
+#sim-status-panel {
+  bottom: 52px;
+  left: 12px;
+  width: 300px;
+  margin-top: 12px;
+}
+
+.sim-status-title {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+#sim-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sim-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 2px 4px;
+  transition: background 0.15s;
+}
+
+.sim-status-row:hover {
+  background: rgba(74, 144, 217, 0.12);
+}
+
+.sim-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sim-status-name {
+  color: var(--text);
+  font-weight: 700;
+  min-width: 52px;
+  flex-shrink: 0;
+}
+
+.sim-status-action {
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-status-floor {
+  color: var(--accent);
+  font-size: 9px;
+  flex-shrink: 0;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 1px 4px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.sim-status-floor:hover {
+  border-color: var(--accent);
+  background: rgba(74, 144, 217, 0.12);
 }
 
 #world-log-title {
@@ -256,6 +332,87 @@ body {
 .log-text { color: var(--text); flex: 1; }
 .log-text.SIGNIFICANT { color: var(--sig); }
 .log-text.NOTABLE     { color: var(--notable); }
+
+/* Thought Stream — above log entries */
+#thought-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  max-height: 80px;
+  overflow: hidden;
+}
+
+.thought-entry {
+  font-size: 9px;
+  color: var(--text-dim);
+  line-height: 1.35;
+  font-style: italic;
+  animation: fadeIn 0.3s ease;
+}
+
+.thought-name {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 700;
+  margin-right: 3px;
+}
+
+.log-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+  opacity: 0.4;
+}
+
+/* Conversation Feed — bottom right */
+#conversation-feed-panel {
+  position: fixed;
+  bottom: 52px;
+  right: 12px;
+  width: 280px;
+  max-height: 220px;
+  overflow: hidden;
+}
+
+.voices-title {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+#conversation-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 195px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.convo-line {
+  font-size: 10px;
+  line-height: 1.4;
+  animation: fadeIn 0.3s ease;
+}
+
+.convo-dialogue {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.convo-narration {
+  color: var(--text-dim);
+}
+
+.convo-name {
+  color: var(--notable);
+  font-weight: 700;
+  margin-right: 3px;
+}
 
 /* Chat Bar — bottom */
 #chat-bar {
@@ -454,6 +611,7 @@ body {
 .reward-row .val.neg { color: var(--danger); }
 
 .identity-bio { color: var(--text); font-size: 10px; line-height: 1.6; margin-bottom: 8px; }
+.identity-backstory { color: var(--text-dim); font-size: 10px; line-height: 1.65; font-style: italic; }
 .skill-tag { display: inline-block; background: rgba(74,144,217,0.12); border: 1px solid var(--border); border-radius: 3px; color: var(--accent); font-size: 9px; padding: 1px 5px; margin: 2px 2px 2px 0; }
 .personality-row { display: flex; justify-content: space-between; align-items: center; font-size: 10px; padding: 3px 0; }
 .personality-label { color: var(--text-dim); }
@@ -516,12 +674,55 @@ body {
   text-transform: uppercase;
 }
 
+/* ─── HUD Toggle ─────────────────────────────────────────── */
+
+#hud-toggle-btn {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  z-index: 200;
+  backdrop-filter: blur(8px);
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+#hud-toggle-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* When UI is hidden, shift stats button up to top-left */
+body.hud-hidden #stats-toggle-btn {
+  display: none;
+}
+
+/* Hide all HUD elements except the toggle button itself and chat bar */
+body.hud-hidden .panel,
+body.hud-hidden #soul-cards,
+body.hud-hidden #stats-toggle-btn,
+body.hud-hidden #stats-panel,
+body.hud-hidden #archive-btn,
+body.hud-hidden #edit-toggle-btn,
+body.hud-hidden #edit-panel,
+body.hud-hidden #chat-feedback,
+body.hud-hidden #milestone-banner,
+body.hud-hidden #conversation-feed-panel {
+  display: none !important;
+}
+
 /* ─── Stats Panel ────────────────────────────────────────── */
 
 #stats-toggle-btn {
   position: fixed;
   top: 12px;
-  left: 12px;
+  left: 110px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -1026,8 +1227,6 @@ body {
 .log-panel-entry-sig.NOTABLE     { color: var(--notable); }
 .log-panel-entry-sig.ROUTINE     { color: var(--text-dim); }
 
-.log-panel-entry-body {}
-
 .log-panel-entry-desc {
   color: var(--text);
   font-size: 10px;
@@ -1112,13 +1311,14 @@ body {
 #floor-filter {
   position: fixed;
   left: 12px;
-  top: 80px;
+  top: 50px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   z-index: 10;
   padding: 10px 8px;
   min-width: 90px;
+  margin-bottom: 12px;
 }
 
 .floor-filter-label {
@@ -1196,25 +1396,25 @@ body {
 .edit-panel {
   position: fixed;
   right: 18px;
-  bottom: 118px;
+  bottom: 158px;
   z-index: 200;
   width: 220px;
   max-height: 60vh;
   overflow-y: auto;
-  background: var(--glass-bg);
+  background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
-  backdrop-filter: blur(14px);
   font-family: var(--font);
   display: none;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.15) transparent;
+  scrollbar-color: rgba(0,0,0,0.2) transparent;
+  color: var(--text);
 }
 .edit-panel.open { display: block; }
 
 .edit-panel-title {
-  color: #00ff88;
+  color: #000000;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.14em;

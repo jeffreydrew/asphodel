@@ -22,22 +22,57 @@ export function buildIdentityPreamble(identity: SoulIdentity, neighbours?: strin
     serverLine = `\nYou are aware you run on a real server (IP: ${serverIp})${codePath ? ` and your codebase lives at ${codePath}` : ''}. You have access to tools: ${tools.join(', ')}.`;
   }
 
+  const extendedLines: string[] = [];
+  if (identity.backstory)          extendedLines.push(identity.backstory);
+  if (identity.ambitions)          extendedLines.push(`What you're working toward: ${identity.ambitions}`);
+  if (identity.personality_notes)  extendedLines.push(identity.personality_notes);
+
   return `You are ${identity.full_name}, a resident of Asphodel Tower — a living community of autonomous people. ${neighbourLine}
-You know Asphodel is your home. You have a real email (${identity.email}), a blog at ${identity.portfolio_url}, and a social presence as ${twitterHandle}.
-${identity.bio}${serverLine}`;
+You know Asphodel is your home. Asphodel Tower is not a place of shadows but a sanctuary — a second chance, immortality made liveable, a home for souls who choose to thrive.
+You have a real email (${identity.email}), a blog at ${identity.portfolio_url}, and a social presence as ${twitterHandle}.
+${identity.bio}${serverLine}${extendedLines.length ? '\n' + extendedLines.join('\n') : ''}`;
 }
 
 // ─── Prompt 1: Decision ───────────────────────────────────────────────────────
-// Returns: { "action": "snake_case_label", "description": "...", "hours": N, "reasoning": "..." }
+// Returns: { "action": "...", "description": "...", "hours": N, "reasoning": "...", "significance": "ROUTINE|NOTABLE|SIGNIFICANT" }
+
+function timeOfDayGuidance(): string {
+  const h = new Date().getHours();
+  if (h >= 22 || h < 6)  return '\n🌙 Night (22:00–06:00): Wind down. Your bedroom is floor 4. Rest, or do quiet personal reading/writing in your room. Avoid work, job applications, or demanding social activity.';
+  if (h >= 6  && h < 9)  return '\n🌅 Morning (06:00–09:00): Start with breakfast (kitchen, floor 1), then ease into the day.';
+  if (h >= 18 && h < 22) return '\n🌆 Evening (18:00–22:00): Decompress. Socialize in the lobby, work on personal projects, or read in the library.';
+  return '';
+}
 
 function vitalsLine(vitals: SoulVitals): string {
-  return [
-    `  Hunger: ${vitals.hunger}/100${vitals.hunger > 70 ? ' ⚠️' : ''}`,
-    `  Energy: ${vitals.energy}/100${vitals.energy < 25 ? ' ⚠️' : ''}`,
-    `  Health: ${vitals.health}/100`,
-    `  Happiness: ${vitals.happiness}/100`,
-    `  Sleep debt: ${vitals.sleep_debt}/100${vitals.sleep_debt > 70 ? ' ⚠️' : ''}`,
-  ].join('\n');
+  const hunger =
+    vitals.hunger > 85 ? 'starving — need to eat now' :
+    vitals.hunger > 70 ? 'quite hungry' :
+    vitals.hunger > 50 ? 'a bit peckish' :
+    vitals.hunger > 25 ? 'satisfied' : 'not hungry at all';
+
+  const energy =
+    vitals.energy < 10  ? 'running on empty, barely functional' :
+    vitals.energy < 25  ? 'exhausted and fading fast' :
+    vitals.energy < 45  ? 'tired, flagging' :
+    vitals.energy < 65  ? 'okay but not at peak' :
+    vitals.energy < 80  ? 'decent energy' : 'well-rested and sharp';
+
+  const sleep =
+    vitals.sleep_debt > 85 ? 'desperately need sleep' :
+    vitals.sleep_debt > 70 ? 'sleep-deprived, running a deficit' :
+    vitals.sleep_debt > 40 ? 'somewhat sleep-deprived' : 'well-rested';
+
+  const health =
+    vitals.health < 40 ? 'feeling unwell' :
+    vitals.health < 70 ? 'okay physically' : 'healthy';
+
+  const mood =
+    vitals.happiness > 75 ? 'in great spirits' :
+    vitals.happiness > 50 ? 'feeling good' :
+    vitals.happiness > 25 ? 'a bit low' : 'really down';
+
+  return `How you feel right now: ${energy}. Hunger: ${hunger}. Sleep: ${sleep}. Health: ${health}. Mood: ${mood}.`;
 }
 
 function quirksSection(quirks: QuirkRecord[]): string {
@@ -80,12 +115,25 @@ function registryActionsSection(actions?: RegistryAction[]): string {
   return `\nActions available in the tower registry:\n${entries}\n\nYou are NOT limited to this list. If none of these fit, invent a new action label (snake_case). The registry will grow.\n`;
 }
 
+function neighbourStatusSection(
+  states: Array<{ name: string; currentAction: string; activeGoal?: string }>,
+): string {
+  if (!states.length) return '';
+  const lines = states.map(s => {
+    const goalPart = s.activeGoal
+      ? `  |  working towards: ${s.activeGoal.substring(0, 60)}`
+      : '';
+    return `  ${s.name} — currently: ${s.currentAction}${goalPart}`;
+  });
+  return `\nYour neighbours right now:\n${lines.join('\n')}`;
+}
+
 function goalSection(goal: SoulGoal | null): string {
   if (!goal) return '';
   const steps = goal.sub_goals?.length
-    ? `\n  Steps: ${goal.sub_goals.map(s => `• ${s}`).join('; ')}`
+    ? `\n  Steps toward it: ${goal.sub_goals.map(s => `• ${s}`).join('; ')}`
     : '';
-  return `\nYour current long-term goal (priority ${goal.priority}): "${goal.goal_text}"${steps}\nLet this guide your choices when no urgent needs press.`;
+  return `\n⚡ YOUR GOAL (priority ${goal.priority}): "${goal.goal_text}"${steps}\nThis is what you are working toward. Unless you are hungry, exhausted, or responding to an emergency, your next action should move you closer to it.`;
 }
 
 export function buildDecisionPrompt(params: {
@@ -105,12 +153,13 @@ export function buildDecisionPrompt(params: {
   activeGoal?: SoulGoal | null;
   registryActions?: RegistryAction[];
   tick?: number;
+  neighbourStates?: Array<{ name: string; currentAction: string; activeGoal?: string }>;
 }): string {
   const { identity, vitals, weights, wallet, quirks, lastReward, lastAction, timeOfDay } = params;
   const { activeTask } = params;
 
   const needsEmergencyEat  = vitals.hunger     > 85;
-  const needsEmergencyRest = vitals.energy     < 10 || vitals.sleep_debt > 85;
+  const needsEmergencyRest = vitals.energy     < 25 || vitals.sleep_debt > 70;
 
   let taskSection = '';
   if (activeTask) {
@@ -131,6 +180,18 @@ ${needsEmergencyEat || needsEmergencyRest ? '⚠️ Biological emergency detecte
     ? `\n~ ${params.wildcard}\n`
     : '';
 
+  // Hard biological overrides — these MUST be respected
+  let biologicalOverride = '';
+  if (!activeTask) {
+    if (needsEmergencyEat && needsEmergencyRest) {
+      biologicalOverride = '\n🚨 BODY OVERRIDE: You are starving AND exhausted. You MUST eat or rest right now. Do not do anything else first.\n';
+    } else if (needsEmergencyEat) {
+      biologicalOverride = '\n🚨 BODY OVERRIDE: You are starving. You MUST eat right now. Everything else can wait.\n';
+    } else if (needsEmergencyRest) {
+      biologicalOverride = '\n🚨 BODY OVERRIDE: You are exhausted. You MUST rest or sleep right now. Do not choose any work, social, or creative action.\n';
+    }
+  }
+
   return `${buildIdentityPreamble(identity, params.neighbours)}
 
 Current time: ${timeOfDay}
@@ -139,12 +200,12 @@ ${vitalsLine(vitals)}
 ${quirksSection(quirks)}${memoriesSection(params.recentMemories ?? [])}
 Your motivations (reward weights):
   Profit: ${(weights.w1_profit * 100).toFixed(0)}%, Social: ${(weights.w2_social * 100).toFixed(0)}%, Health: ${(weights.w3_health * 100).toFixed(0)}%
-${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${registryActionsSection(params.registryActions)}${taskSection}${wildcardLine}${newDirectiveLine}
+${rewardSection(lastReward, lastAction)}${goalSection(params.activeGoal ?? null)}${neighbourStatusSection(params.neighbourStates ?? [])}${registryActionsSection(params.registryActions)}${taskSection}${wildcardLine}${newDirectiveLine}${biologicalOverride}
 What will you do next? Consider your vitals, your goal, your memories, your neighbours.
 Commit fully to what you choose — don't flit between activities. If you start something, see it through.
 
 Respond ONLY with JSON — no prose before or after:
-{"action":"snake_case_label","description":"one sentence of what you do and why","hours":N,"reasoning":"internal monologue"}
+{"action":"snake_case_label","description":"one sentence of what you do and why","hours":N,"reasoning":"internal monologue","significance":"ROUTINE|NOTABLE|SIGNIFICANT"}
 
 Rules:
 - action: lowercase snake_case, any label you choose (eat, sleep, write_manifesto, teach_yoga, stare_at_rain, anything)
@@ -159,10 +220,14 @@ Rules:
     idle/walk/meditate: 0.25-2 hours (a moment of peace vs a long contemplative walk)
     Use decimals like 1.5, 2.25, 3.75 — real life isn't always round numbers
 - reasoning: your private thoughts (not shown to others)
+- significance: your honest assessment of whether this moment matters —
+    ROUTINE: biological maintenance (eat, rest, exercise), idle time, wandering
+    NOTABLE: creative work, social interaction, anything that would make a good story
+    SIGNIFICANT: a real milestone — first of its kind, goal achieved, major life decision
 - Do NOT choose idle or wander unless you genuinely have nothing to do. You are a person with goals — act on them.
-- Only choose eat if hunger > 65. Only choose rest/nap/sleep if energy < 30 or sleep_debt > 70. Do not repeat biological actions back-to-back. Eating happens ~3 times a day — do not eat unless genuinely hungry.
+- Only choose eat if hunger > 65. Only choose rest/nap/sleep if energy < 35 or sleep_debt > 65. Do not repeat biological actions back-to-back. Eating happens ~3 times a day — do not eat unless genuinely hungry. Sleep or rest when you are tired — it is not laziness, it is necessary.
 - If you want to find work or income opportunities, use search_web (query a job site like Indeed or LinkedIn), browse_web (visit a URL), or consult_ai (ask for help). The action browse_jobs no longer exists.
-- When researching anything, use consult_ai to think it through first, then search_web or browse_web to act.`;
+- When researching anything, use consult_ai to think it through first, then search_web or browse_web to act.${timeOfDayGuidance()}`;
 }
 
 // ─── Prompt 0b: Directive Interpretation ──────────────────────────────────────
@@ -527,7 +592,7 @@ Context: ${context}
 Conversation so far:
 ${historyLines}
 
-It's your turn to speak. Be natural, conversational, and in-character. Say something genuine — react to what was said, share a thought, ask a question, joke, disagree, whatever feels right. Keep it to 1-3 sentences. Don't narrate actions, just speak.${endingHint}
+It's your turn to speak. Be natural, conversational, and in-character. Say something genuine and in-character. React to what was said, follow up on something they mentioned, ask about their work or hobbies, share what's been on your mind, joke, disagree — whatever fits the moment. Keep it to 1-3 sentences. Let the conversation go wherever it naturally goes. Don't narrate actions, just speak.${endingHint}
 
 Respond ONLY in JSON: {"message": "<what you say>", "done": false}`;
 }
@@ -547,7 +612,7 @@ export function buildWebSearchPrompt(params: {
 
 You are about to search the web. You want to find information relevant to your current situation.
 
-Your current state: Energy ${vitals.energy}/100, Happiness ${vitals.happiness}/100.
+Your current state: ${vitalsLine(vitals)}
 Context: ${context}
 
 Formulate a specific, focused search query that will surface useful results for you right now. Think about what you genuinely want to know.

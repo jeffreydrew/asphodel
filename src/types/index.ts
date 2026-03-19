@@ -78,7 +78,11 @@ export interface SoulIdentity {
   location_public: string;
   profile_photo: string;
   payment_method: string;
-  llm_model?: string;   // per-soul model override; falls back to OLLAMA_MODEL env var
+  llm_model?: string;          // per-soul model override; falls back to OLLAMA_MODEL env var
+  // Rich character depth — cached in system blocks
+  backstory?: string;          // 2-4 sentences of origin/history
+  ambitions?: string;          // what they're working toward, what they want
+  personality_notes?: string;  // how they relate to others, quirks of character
 }
 
 export interface SoulRecord {
@@ -200,8 +204,9 @@ export interface Action {
   type: ActionType | string;
   payload: Record<string, unknown>;
   reasoning?: string;
-  story_hours?: number;   // how long this action takes (in story-hours)
-  description?: string;  // free-form narrative description from LLM
+  story_hours?: number;      // how long this action takes (in story-hours)
+  description?: string;     // free-form narrative description from LLM
+  llm_significance?: string; // soul's self-reported: 'ROUTINE' | 'NOTABLE' | 'SIGNIFICANT'
 }
 
 export interface ActionResult {

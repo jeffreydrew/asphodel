@@ -12,6 +12,11 @@ let milestoneTimer = null;
 export function initHUD() {
   document.getElementById('panel-close').addEventListener('click', closeSoulPanel);
 
+  // Wire conversation feed to speech bubble events
+  import('./api.js').then(({ onSpeechBubble }) => {
+    onSpeechBubble(event => appendConversation(event));
+  });
+
   const chatSend = document.getElementById('chat-send');
   const chatInput = document.getElementById('chat-input');
 
@@ -42,6 +47,21 @@ export function initHUD() {
 
   // Clock tick
   setInterval(updateClock, 1_000);
+
+  // HUD toggle
+  window.__toggleHUD = toggleHUD;
+  document.addEventListener('keydown', e => {
+    if (e.key === 'h' || e.key === 'H') {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+      toggleHUD();
+    }
+  });
+}
+
+function toggleHUD() {
+  const isHidden = document.body.classList.toggle('hud-hidden');
+  const btn = document.getElementById('hud-toggle-btn');
+  if (btn) btn.textContent = isHidden ? '◈ SHOW UI' : '◈ HIDE UI';
 }
 
 // ─── World Update ─────────────────────────────────────────────────────────────
@@ -49,7 +69,9 @@ export function initHUD() {
 export function updateHUD(data) {
   souls = data.souls;
   renderSoulCards(data.souls);
+  renderSimStatus(data.souls);
   renderWorldLog(data.recent_log);
+  renderThoughtStream(data.recent_log);
   checkMilestones(data.recent_log);
 }
 
@@ -115,21 +137,33 @@ function updateSoulCard(card, soul, i) {
 
 // ─── World Log ────────────────────────────────────────────────────────────────
 
-const seenLogIds = new Set();
+const seenLogIds  = new Set();
+let _logBuffer    = [];   // rolling buffer of last 40 received entries
+let _showRoutine  = false;
 
 function renderWorldLog(entries) {
   const container = document.getElementById('log-entries');
-  const fragment  = document.createDocumentFragment();
 
-  const newEntries = entries
-    .filter(e => e.id && !seenLogIds.has(e.id))
+  // Buffer all new entries (even ROUTINE, so the toggle can show them later)
+  const newEntries = entries.filter(e => e.id && !seenLogIds.has(e.id));
+  newEntries.forEach(e => {
+    seenLogIds.add(e.id);
+    _logBuffer.push(e);
+  });
+  if (_logBuffer.length > 40) _logBuffer = _logBuffer.slice(-40);
+
+  // Only append non-ROUTINE entries to the HUD stream by default
+  const toRender = newEntries
+    .filter(e => _showRoutine || e.significance !== 'ROUTINE')
     .slice(0, 5);
 
-  newEntries.forEach(entry => {
-    seenLogIds.add(entry.id);
+  if (toRender.length === 0) return;
+
+  const fragment = document.createDocumentFragment();
+
+  toRender.forEach(entry => {
     const sigChar = entry.significance === 'SIGNIFICANT' ? '★' :
                     entry.significance === 'NOTABLE'     ? '◆' : '·';
-
     const div = document.createElement('div');
     div.className = 'log-entry';
     div.innerHTML = `
@@ -139,13 +173,81 @@ function renderWorldLog(entries) {
     fragment.prepend(div);
   });
 
-  if (fragment.childNodes.length > 0) {
-    container.prepend(fragment);
-    // Trim to 20 entries
-    while (container.children.length > 20) {
-      container.removeChild(container.lastChild);
-    }
+  container.prepend(fragment);
+  while (container.children.length > 20) {
+    container.removeChild(container.lastChild);
   }
+}
+
+// Called by the "show/hide routine" toggle link in the HUD
+window.__toggleRoutine = function () {
+  _showRoutine = !_showRoutine;
+  const toggleEl = document.getElementById('log-routine-toggle');
+  if (toggleEl) toggleEl.textContent = _showRoutine ? 'hide routine' : 'show routine';
+
+  // Full re-render of the HUD stream from the buffer
+  const container = document.getElementById('log-entries');
+  container.innerHTML = '';
+
+  const toShow = _logBuffer
+    .filter(e => _showRoutine || e.significance !== 'ROUTINE')
+    .slice(-20);
+
+  // Iterate oldest-first and prepend each so newest ends at top
+  toShow.forEach(entry => {
+    const sigChar = entry.significance === 'SIGNIFICANT' ? '★' :
+                    entry.significance === 'NOTABLE'     ? '◆' : '·';
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    div.innerHTML = `
+      <span class="log-sig ${entry.significance}">${sigChar}</span>
+      <span class="log-text ${entry.significance}">${truncate(entry.description, 60)}</span>
+    `;
+    container.prepend(div);
+  });
+};
+
+// ─── Thought Stream ───────────────────────────────────────────────────────────
+
+const seenThoughtIds = new Set();
+
+function renderThoughtStream(entries) {
+  const container = document.getElementById('thought-stream');
+  if (!container) return;
+
+  const withReasoning = entries.filter(e =>
+    e.id &&
+    !seenThoughtIds.has(e.id) &&
+    e.metadata?.reasoning &&
+    e.significance !== 'ROUTINE',
+  );
+
+  withReasoning.forEach(entry => {
+    seenThoughtIds.add(entry.id);
+    const firstName = (entry.soul_name ?? '?').split(' ')[0];
+    const div = document.createElement('div');
+    div.className = 'thought-entry';
+    div.innerHTML = `<span class="thought-name">${escapeHtml(firstName)}</span> ${escapeHtml(truncate(entry.metadata.reasoning, 80))}`;
+    container.prepend(div);
+  });
+
+  while (container.children.length > 8) container.removeChild(container.lastChild);
+}
+
+// ─── Conversation Feed ────────────────────────────────────────────────────────
+
+function appendConversation(event) {
+  const container = document.getElementById('conversation-feed');
+  if (!container) return;
+
+  const firstName = (event.soul_name ?? '?').split(' ')[0];
+  const isConvo   = !!event.conversation_id;
+  const div       = document.createElement('div');
+  div.className   = `convo-line ${isConvo ? 'convo-dialogue' : 'convo-narration'}`;
+  div.innerHTML   = `<span class="convo-name">${escapeHtml(firstName)}</span> ${escapeHtml(truncate(event.text, 80))}`;
+  container.prepend(div);
+
+  while (container.children.length > 20) container.removeChild(container.lastChild);
 }
 
 // ─── Milestone Banner ─────────────────────────────────────────────────────────
@@ -301,6 +403,36 @@ function renderIdentity(identity) {
   bio.textContent = identity.bio ?? '';
   const tags = Array.isArray(identity.skills_public) ? identity.skills_public : [];
   skills.innerHTML = tags.map(s => `<span class="skill-tag">${s}</span>`).join('');
+
+  // Backstory
+  const backstorySection = document.getElementById('panel-backstory-section');
+  const backstoryEl      = document.getElementById('panel-backstory');
+  if (identity.backstory) {
+    backstoryEl.textContent = identity.backstory;
+    backstorySection.style.display = '';
+  } else {
+    backstorySection.style.display = 'none';
+  }
+
+  // Ambitions
+  const ambitionsSection = document.getElementById('panel-ambitions-section');
+  const ambitionsEl      = document.getElementById('panel-ambitions');
+  if (identity.ambitions) {
+    ambitionsEl.textContent = identity.ambitions;
+    ambitionsSection.style.display = '';
+  } else {
+    ambitionsSection.style.display = 'none';
+  }
+
+  // Personality notes
+  const pnSection = document.getElementById('panel-personality-notes-section');
+  const pnEl      = document.getElementById('panel-personality-notes');
+  if (identity.personality_notes) {
+    pnEl.textContent = identity.personality_notes;
+    pnSection.style.display = '';
+  } else {
+    pnSection.style.display = 'none';
+  }
 }
 
 function renderPersonalityWeights(weights) {
@@ -399,6 +531,15 @@ async function sendDirective() {
   setTimeout(() => feedback.classList.remove('show'), 2_500);
 
   input.value = '';
+
+  if (ok) {
+    const soulName = soul?.name?.split(' ')[0] ?? 'soul';
+    appendConversation({
+      soul_name: '⚡ DIRECTIVE',
+      text: `Sent to ${soulName}: "${message.substring(0, 60)}"`,
+      conversation_id: null,
+    });
+  }
 
   if (ok && soul) {
     processDirectiveResponse(soul, message);
@@ -574,7 +715,7 @@ function openWork(work) {
 
   document.getElementById('archive-reader-title').textContent = work.title;
   document.getElementById('archive-reader-meta').textContent =
-    `${work.soul_name} · ${work.type} · ${new Date(work.ts).toLocaleString()}`;
+    `${work.soul_name} · ${work.type} · ${new Date(work.ts).toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`;
   document.getElementById('archive-reader-content').textContent = work.content;
 
   // Highlight active item
@@ -583,7 +724,7 @@ function openWork(work) {
 
 function formatTs(ts) {
   const d = new Date(ts);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
 }
 
 function escapeHtml(str) {
@@ -640,7 +781,7 @@ function renderLogList(entries) {
     div.innerHTML = `
       <span class="log-panel-entry-sig ${entry.significance}">${sigChar}</span>
       <div class="log-panel-entry-body">
-        <div class="log-panel-entry-desc">${escapeHtml(truncate(entry.description, 80))}</div>
+        <div class="log-panel-entry-desc">${escapeHtml(truncate(entry.description, 120))}</div>
         <div class="log-panel-entry-meta">${escapeHtml(entry.soul_name ?? '?')} · ${entry.action} · ${formatTs(entry.ts)}</div>
       </div>
     `;
@@ -676,7 +817,7 @@ function openLogEntry(entry) {
   document.getElementById('log-reader-action').textContent =
     `${entry.action} — ${entry.soul_name ?? '?'}`;
 
-  const ts = new Date(entry.ts * 1000).toLocaleString();
+  const ts = new Date(entry.ts * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
   const reward = entry.metadata?.reward_total != null
     ? `  ·  reward: ${Number(entry.metadata.reward_total) >= 0 ? '+' : ''}${Number(entry.metadata.reward_total).toFixed(4)}`
     : '';
@@ -699,6 +840,88 @@ function openLogEntry(entry) {
   } else {
     generatedEl.textContent = '';
   }
+}
+
+// ─── Sim Status Widget ────────────────────────────────────────────────────────
+
+const ACTION_FLOOR_LABEL = {
+  read_book:    'LIBRARY',
+  write:        'LIBRARY',
+  research:     'LIBRARY',
+  rest:         'BEDROOM',
+  sleep:        'BEDROOM',
+  exercise:     'GYM',
+  yoga:         'GYM',
+  eat:          'KITCHEN',
+  cook:         'KITCHEN',
+  browse_jobs:  'OFFICE',
+  work:         'OFFICE',
+  meet_soul:    'LOBBY',
+  socialize:    'LOBBY',
+  idle:         'LOBBY',
+};
+
+const FLOOR_ORDER = ['LOBBY','KITCHEN','OFFICE','GYM','BEDROOM','LIBRARY'];
+
+function getSimStatusLabel(soul) {
+  const action = soul.last_action ?? 'idle';
+
+  // Prefer live avatar state if world.js has initialised
+  const avatarStatus = window.__getAvatarStatus?.(soul.id);
+  const floorLabel   = avatarStatus?.floorLabel ?? ACTION_FLOOR_LABEL[action] ?? 'LOBBY';
+  const floorIndex   = avatarStatus?.floorIndex  ?? FLOOR_ORDER.indexOf(floorLabel);
+  const avatarState  = avatarStatus?.state;
+
+  let taskText;
+  if (!avatarStatus) {
+    taskText = action.replace(/_/g, ' ');
+  } else if (avatarState === 'DOING_TASK') {
+    taskText = action.replace(/_/g, ' ');
+  } else if (avatarState === 'WALKING_TO_TASK') {
+    taskText = `→ ${action.replace(/_/g, ' ')}`;
+  } else {
+    // WANDER — show floor name as activity
+    taskText = floorLabel.toLowerCase();
+  }
+
+  return { floorLabel, floorIndex, taskText };
+}
+
+function renderSimStatus(simSouls) {
+  const container = document.getElementById('sim-status-list');
+  if (!container) return;
+
+  simSouls.forEach((soul, i) => {
+    let row = document.getElementById(`sim-status-${soul.id}`);
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'sim-status-row';
+      row.id = `sim-status-${soul.id}`;
+      container.appendChild(row);
+    }
+
+    const color     = SOUL_COLORS[i] ?? '#aaa';
+    const firstName = soul.name.split(' ')[0];
+    const { floorLabel, floorIndex, taskText } = getSimStatusLabel(soul);
+
+    row.innerHTML = `
+      <div class="sim-status-dot" style="background:${color}"></div>
+      <span class="sim-status-name">${escapeHtml(firstName)}</span>
+      <span class="sim-status-action">${escapeHtml(taskText)}</span>
+      <span class="sim-status-floor" data-floor="${floorIndex}" data-soul-id="${soul.id}">${floorLabel}</span>
+    `;
+
+    row.querySelector('.sim-status-floor').addEventListener('click', e => {
+      e.stopPropagation();
+      const fi = parseInt(e.currentTarget.dataset.floor, 10);
+      window.__isolateFloorAndZoom?.(fi, soul.id);
+    });
+
+    row.addEventListener('click', () => {
+      window.__zoomToSoul?.(soul.id);
+      openSoulPanel(soul.id);
+    });
+  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

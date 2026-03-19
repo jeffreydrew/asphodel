@@ -11,7 +11,8 @@
 
 import { randomUUID } from 'crypto';
 import { getPool } from '../db/pgClient';
-import { ollama } from '../llm/OllamaClient';
+import { anthropicClient } from '../llm/AnthropicClient';
+import { buildSystemBlocks } from '../llm/systemBlocks';
 import { buildConversationTurnPrompt } from '../llm/prompts';
 import { worldEvents } from '../world/WorldState';
 import { embedText } from '../db/embed';
@@ -57,7 +58,7 @@ export interface ConversationParticipant {
 export async function runConversation(
   participants: ConversationParticipant[],
   context: string,
-  maxTurns: number = 6,
+  maxTurns: number = 8,
 ): Promise<void> {
   if (participants.length < 2) return;
 
@@ -112,10 +113,20 @@ export async function runConversation(
         maxTurns,
       });
 
-      const raw = await ollama.chat(
-        [{ role: 'user', content: prompt }],
-        { json: true, temperature: 0.85, model: speaker.identity.llm_model },
-      );
+      const speakerSystemBlocks = buildSystemBlocks({
+        identity: speaker.identity,
+        neighbours: otherNames,
+        quirks: speaker.quirks,
+        goals: [],
+      });
+
+      const resp = await anthropicClient.chat({
+        systemBlocks: speakerSystemBlocks,
+        messages: [{ role: 'user', content: prompt }],
+        label: 'conversationTurn',
+        soulName: speaker.name,
+      });
+      const raw = resp.text;
 
       let text = '';
       if (raw) {

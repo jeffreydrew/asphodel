@@ -289,5 +289,20 @@ export async function applySchema(pool: Pool): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_codebase_changes_soul_id ON codebase_changes(soul_id, ts);
+
+    CREATE TABLE IF NOT EXISTS furniture_layout (
+      furniture_id  TEXT    PRIMARY KEY,
+      floor         INTEGER NOT NULL,
+      glb_file      TEXT    NOT NULL,
+      x             REAL    NOT NULL DEFAULT 0,
+      y             REAL    NOT NULL DEFAULT 0,
+      z             REAL    NOT NULL DEFAULT 0,
+      rotation_y    REAL    NOT NULL DEFAULT 0,
+      scale         REAL    NOT NULL DEFAULT 3.75,
+      deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at    BIGINT  NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_furniture_layout_floor ON furniture_layout(floor);
   `);
 }

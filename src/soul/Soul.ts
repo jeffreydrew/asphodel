@@ -61,7 +61,7 @@ export class Soul {
     const row = rows[0] as SoulDbRow | undefined;
     if (!row) throw new Error(`Soul ${soulId} not found`);
 
-    return new Soul({
+    const soul = new Soul({
       id:             row.id,
       name:           row.name,
       email:          row.email,
@@ -71,6 +71,14 @@ export class Soul {
       is_active:      row.is_active,
       created_at:     row.created_at,
     });
+
+    const { rows: tickRows } = await getPool().query<{ max_tick: number | null }>(
+      'SELECT MAX(tick) as max_tick FROM reward_history WHERE soul_id = $1',
+      [row.id],
+    );
+    soul._tick = Number(tickRows[0]?.max_tick ?? 0);
+
+    return soul;
   }
 
   static async loadAll(): Promise<Soul[]> {
@@ -78,7 +86,7 @@ export class Soul {
       'SELECT * FROM souls WHERE is_active = TRUE',
     );
 
-    return (rows as SoulDbRow[]).map(row => new Soul({
+    const souls = (rows as SoulDbRow[]).map(row => new Soul({
       id:             row.id,
       name:           row.name,
       email:          row.email,
@@ -88,6 +96,17 @@ export class Soul {
       is_active:      row.is_active,
       created_at:     row.created_at,
     }));
+
+    if (souls.length > 0) {
+      const { rows: tickRows } = await getPool().query<{ soul_id: string; max_tick: number | null }>(
+        'SELECT soul_id, MAX(tick) as max_tick FROM reward_history WHERE soul_id = ANY($1) GROUP BY soul_id',
+        [souls.map(s => s.id)],
+      );
+      const tickMap = new Map(tickRows.map(r => [r.soul_id, Number(r.max_tick ?? 0)]));
+      souls.forEach(s => { s._tick = tickMap.get(s.id) ?? 0; });
+    }
+
+    return souls;
   }
 
   get vitals(): SoulVitals                      { return this._vitals; }

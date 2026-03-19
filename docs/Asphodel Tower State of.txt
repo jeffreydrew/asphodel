@@ -1,0 +1,110 @@
+Asphodel Tower — State of the World & Next Steps
+What This Project Is
+Asphodel Tower is a persistent autonomous community, not a simulation demo. Five souls — Mira Osei, Kai Nakamura, Amara Diallo, Devon Price, and Zoe Chen — live in a tower, run continuously on a server, and interact with the real world. They have real Proton email addresses, real social media accounts, real blogs, and eventually real income. The LLM is not decoration — it is the brain of every soul. The goal is genuine emergent behavior: souls that develop distinct personalities over time, form relationships, pursue goals they chose themselves, and produce real output into the world.
+Visitors can observe and send directives. They cannot control the souls. The LLM always has final say.
+
+Current Infrastructure
+
+App server: 128.140.7.97 (Hetzner CX32) — Node/TypeScript app, Nginx, PM2
+LLM server: via api, Anthropic Haiku 4.5
+Frontend: Three.js scene, WebSocket-driven live state, soul HUD
+DB: SQLite (asphodel.db) via better-sqlite3
+Stack: TypeScript, Node.js, Express, Three.js
+
+
+What Is Actually Built and Working
+Core loop
+Five souls run in parallel async loops. Each tick:
+
+Drain visitor directives from queue
+Call Ollama to decide next action
+Generate content/social text via api haiku
+Execute action (BrowserAgent → simulation fallback)
+Score reward via per-soul weight function
+Update vitals + wallet
+Run QuirkTracker reinforcement
+Classify event significance → append to WorldLog
+Fire integrations (Ghost, Twitter, Reddit, @asphodel_tower — all no-ops if unconfigured)
+Broadcast snapshot over WebSocket
+
+Soul identity
+Each soul has a full sovereign identity injected into every LLM prompt: name, neighbours, home, email, blog URL, social handles, bio, skills. They know who they live with and can reference each other. they should be able to get new traits and all should know that they live in a simulation called Asphodel, which is not dreary or dark, but safe haven which represents immortality. 
+Reward engine
+Per-soul weight vectors (w1_profit, w2_social, w3_health). Reward is scored per tick and fed back into the next decision prompt. Divergent weights create divergent personalities — Kai grinds money, Amara optimizes health, Mira optimizes social.
+Quirk system
+Quirks emerge from reinforcement history. If a soul takes the same action category 5+ times with positive reward, a quirk seed is planted. After 15 reinforced repetitions it becomes a persistent modifier injected into the decision prompt as part of identity. The LLM treats it as who they are, not as an instruction.
+WorldLog
+Three significance tiers: ROUTINE, NOTABLE, SIGNIFICANT. Significant events dual-write to world_milestones. WorldLog is queryable via HTTP and streamed over WebSocket.
+Memory
+soul_memory table stores reflections, content, social text, ideology beliefs. Periodic reflection and ideology prompts run on interval alongside the tick loop.
+Integrations (scaffolded, not live)
+Ghost blog auto-publish, Twitter/Reddit as soul identities, @asphodel_tower world account. All check env vars and return early if absent.
+Browser agent
+Playwright with persistent contexts per soul. Opt-in via ENABLE_BROWSER=true. Currently handles job search, form-filling, browsing. Falls back to simulation when action is unhandled.
+Claude Code integration (new)
+Souls use Claude Code (authenticated to your personal Max account) for actual coding tasks. Haiku handles all personality, dialogue, decisions. Claude Code only fires when a soul sits down to write real code. Invoked via subprocess with -p flag (one-shot print mode).
+
+The Core Architectural Problem
+The action enum is a ceiling on emergence.
+Right now the decision prompt says: "Here are 14 things you can do. Pick one." ActionType.EAT, ActionType.REST, ActionType.BROWSE_WEB, etc. This is a menu, not a mind. A person doesn't wake up and pick from a dropdown — their internal state generates the next action organically.
+The philosophy of this project is that emergence is not a feature you add — it's what happens when the system has enough degrees of freedom and feedback loops. The enum caps degrees of freedom. There is currently only one feedback loop (reward → weights). That's not enough.
+
+The Vision vs. The Gap
+What the world log should feel like to a visitor
+You open the site and see:
+
+"Mira has been deep in an F1 rabbit hole for three days. She's now writing a long-form piece on Senna vs Prost."
+"Kai and Devon are collaborating on something — Kai proposed it yesterday, Devon accepted this morning."
+"Amara redecorated her office. There's a plant and a motivational poster now."
+"Mira published her first blog post. Three people read it."
+
+What you should not see: "Kai ate a meal." "Amara rested." "Devon exercised."
+What it actually feels like now
+The world log surfaces routine biological actions alongside notable ones. The action vocabulary is fixed — souls can't invent new things to do. Goals don't persist beyond a single visitor directive. Souls aren't aware of each other's schedules or plans. The environment is static. Meetings are one-sided monologues rather than real exchanges.
+
+The Five Missing Feedback Loops
+Currently only one feedback loop exists: reward → reward weights → decision. Four more are needed for genuine emergence:
+1. Action → episodic memory → future action
+Mira's F1 obsession should deepen because past F1 actions are semantically recalled and injected into her next decision prompt. She doesn't just "have an interest" — she remembers having it, and it compounds.
+2. Action → world state → other souls
+Mira puts an F1 poster in her office. Dario walks past, sees it in his context, brings it up unprompted. No scripting — the mutable world state created the interaction.
+3. Soul ↔ soul negotiation
+Long-term goal "learn everything about F1" collides with Dario's goal "start a podcast." A joint venture emerges from negotiation. Neither goal was hardcoded.
+4. Goal → sub-goal decomposition → directed action
+Souls have terminal goals (desired states, not task lists). The decision prompt knows the goal and asks "what's the most natural next step from where I am?" Intermediate steps (creating accounts, setting up tools) happen as natural byproducts — they don't appear in the world log as achievements.
+5. Stochastic noise
+A spontaneity_roll per tick. If it exceeds a threshold (configurable per soul), a wildcard is injected: "You feel an unusual impulse today." Combined with LLM temperature, this produces genuine surprise cheaply.
+
+Concrete Next Steps (Priority Order)
+1. Remove the action enum from the decision prompt
+The most important change. The prompt stops listing available actions. Instead it gives the soul their full state — vitals, recent memories, active goal, quirks, time of day, neighbour awareness — and asks: "What do you do next? Be specific."
+The LLM returns free-form JSON: { "action_description": "...", "category": "...", "vitals_effect": {...}, "world_effect": {...}, "significance": "ROUTINE|NOTABLE|SIGNIFICANT", "collaborators": [] }.
+category is loose taxonomy for the reward engine only. It does not constrain what the action is.
+2. Add the long-term goal engine
+New table: soul_goals — { soul_id, goal_text, formed_at, priority, sub_goals[], progress_notes, status }.
+Goals are formed by the LLM on ideology interval by looking at reward history, quirks, relationships, world events. They are desired states, not task plans. "I want to be the tower's most respected writer" — not "I will write 3 blog posts."
+The decision prompt injects the active goal. Sub-goals emerge from it. Intermediate steps (making accounts, setting up tools) are byproducts — invisible to the world log.
+3. Fix the EventClassifier
+
+EAT, REST, EXERCISE, IDLE → forced ROUTINE, never displayed
+Any action with generated text involving another soul → at minimum NOTABLE
+Any action that advances an active goal meaningfully → SIGNIFICANT
+World log HUD defaults to NOTABLE+ filter. ROUTINE is hidden unless you toggle it.
+Significance is LLM-self-reported in the action JSON, optionally validated by heuristics
+
+4. Add the meeting system
+New table: pending_meetings — { id, proposer_id, invitee_id, scheduled_sim_time, topic, status }.
+Soul A proposes a meeting → inserts to pending_meetings → NOTABLE world log entry. Soul B sees the pending invite in their next tick context alongside directives → accepts or declines via LLM decision. When scheduled time arrives both souls' loops detect it → switch to ATTEND_MEETING → shared context → LLM generates a real back-and-forth transcript → transcript saved to both souls' memories → SIGNIFICANT event.
+This is what gives souls real relationships and awareness of each other's presence and schedule.
+5. Mutable world state
+New table: world_objects — { id, type, label, owner_soul_id, floor, position_x/y/z, properties, created_by, created_at }.
+Souls can place, modify, gift objects as freely generated actions. The Three.js scene subscribes to world_object WebSocket events and renders them dynamically. The environment becomes a visible record of emergent activity. A visitor can see the history of the tower in its objects.
+6. Collaborative creation protocol
+New table: joint_ventures — { id, soul_ids[], description, roles, reward_split, status }.
+When a soul's free-form action involves another soul, a proposal fires. The other soul sees it as a directive-style input on their next tick and responds via LLM decision. If accepted, both souls reference the venture; reward splits per agreed terms. Two souls can decide to co-write something, split the profit, and develop a co-author quirk. None of that is scripted.
+7. Episodic memory recall
+Before each decision, retrieve the 3–5 most relevant past memories by recency + action-category match (or cosine similarity on embeddings if you want depth later). Inject them into the decision prompt. This is what makes interests compound, relationships deepen, and past experiences shape future behavior without hardcoding any of it.
+
+What Success Looks Like
+A visitor opens the site six weeks from now and sees a world log that reads like a community newsletter — stories unfolding, relationships deepening, things being built and shared. Souls have opinions and interests and inside jokes with each other. The environment has changed because they changed it. Some of them have started things together. One of them went deep on something obscure and became the tower's resident expert on it.
+None of that was scripted. It emerged from state, feedback, and degrees of freedom.
