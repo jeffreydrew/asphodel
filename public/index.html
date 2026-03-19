@@ -39,6 +39,26 @@
   <!-- ── Soul Cards (top right) ───────────────────────────────── -->
   <div id="soul-cards"></div>
 
+  <!-- ── Stats Toggle (top left) ─────────────────────────────── -->
+  <button id="stats-toggle-btn" onclick="window.__toggleStats?.()">◈ STATS</button>
+
+  <!-- ── Stats Panel ───────────────────────────────────────────── -->
+  <div id="stats-panel">
+    <div id="stats-header">
+      <span>◈ TOWER STATS</span>
+      <div id="stats-filters">
+        <button class="stats-filter-btn active" data-filter="1H">1H</button>
+        <button class="stats-filter-btn" data-filter="6H">6H</button>
+        <button class="stats-filter-btn" data-filter="24H">24H</button>
+        <button class="stats-filter-btn" data-filter="7D">7D</button>
+      </div>
+      <button id="stats-close" onclick="window.__toggleStats?.()">✕</button>
+    </div>
+    <div id="stats-body">
+      <div class="stats-empty">open to load stats</div>
+    </div>
+  </div>
+
   <!-- ── Floor Filter (left side) ────────────────────────────── -->
   <div class="panel" id="floor-filter">
     <div class="floor-filter-label">FLOORS</div>

@@ -12,6 +12,10 @@ import { pushSnapshot, worldEvents, invalidateObjectsCache } from '../world/Worl
 import { drain as drainDirectives } from '../world/DirectiveQueue';
 import { updatePosition } from '../world/PositionTracker';
 import { ollama } from '../llm/OllamaClient';
+import { anthropicClient } from '../llm/AnthropicClient';
+import type { AnthropicContentBlock } from '../llm/AnthropicClient';
+import { buildSystemBlocks } from '../llm/systemBlocks';
+import { runComputerTask } from '../llm/ComputerUseAgent';
 import {
   buildContentPrompt,
   buildSocialPrompt,
@@ -36,6 +40,11 @@ import { getRegistryActions, seedRegistry } from '../world/ActionRegistry';
 import { runConversation, isInConversation, emitNarrationBubble } from './ConversationLoop';
 import type { ConversationParticipant } from './ConversationLoop';
 import { randomUUID } from 'crypto';
+
+const SILENT_ACTIONS = new Set([
+  'eat', 'rest', 'nap', 'sleep', 'exercise', 'walk', 'idle',
+  'meditate', 'journal', 'wander', 'cook', 'browse_jobs', 'submit_application',
+]);
 
 const REFLECTION_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes real time
 const IDEOLOGY_INTERVAL_MS   = 8 * 60 * 1000; // 8 minutes real time
@@ -79,6 +88,28 @@ let llmAvailable      = false;
 let llmLastChecked    = 0;
 let contentFailStreak = 0;
 
+// ─── Cache stats (logged every 100 ticks) ─────────────────────────────────────
+let _tickCount  = 0;
+let _cacheStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+function accumulateCacheStats(usage: { input: number; output: number; cacheRead: number; cacheWrite: number }): void {
+  _cacheStats.input      += usage.input;
+  _cacheStats.output     += usage.output;
+  _cacheStats.cacheRead  += usage.cacheRead;
+  _cacheStats.cacheWrite += usage.cacheWrite;
+}
+
+function maybePrintCacheStats(label: string): void {
+  _tickCount++;
+  if (_tickCount % 100 === 0) {
+    const { input, output, cacheRead, cacheWrite } = _cacheStats;
+    process.stdout.write(
+      `[AgentLoop] [cacheStats] after ${_tickCount} ticks from ${label}: ` +
+      `in=${input} out=${output} cache_read=${cacheRead} cache_write=${cacheWrite}\n`,
+    );
+  }
+}
+
 async function checkLLM(): Promise<boolean> {
   const now = Date.now();
   if (now - llmLastChecked > LLM_RECHECK_INTERVAL) {
@@ -113,7 +144,7 @@ export async function runAgentLoop(soul: Soul, slotIndex: number, neighbours: st
   if (!lastGoalTime.has(soul.id))       lastGoalTime.set(soul.id, Date.now() - GOAL_INTERVAL_MS + jitter);
 
   const usingLLM = await checkLLM();
-  log(soul.name, `Agent loop started. LLM: ${usingLLM ? 'Ollama ✓' : 'hardcoded fallback'} | slot #${slotIndex}`);
+  log(soul.name, `Agent loop started. LLM: ${usingLLM ? 'Anthropic ✓' : 'hardcoded fallback'} | slot #${slotIndex}`);
 
   while (soul.is_active) {
     try {
@@ -149,12 +180,15 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   const driftedVitals = applyPassiveDrift(vitalsBefore);
   await soul.updateVitals(driftedVitals);
 
+  // Build cached system blocks (identity + quirks) for Anthropic prompt caching
+  const systemBlocks = buildSystemBlocks({ identity: soul.identity, neighbours, quirks: quirkList, goals: [] });
+
   // 2. Drain visitor directives (check for venture prefix before routing)
   const directives = await drainDirectives(soul.id);
   let directive: string | undefined;
   for (const d of directives) {
     if (d.message.startsWith('[VENTURE:')) {
-      await handleVentureDirective(soul, d.message, quirkList, neighbours);
+      await handleVentureDirective(soul, d.message, quirkList, neighbours, systemBlocks);
     } else {
       directive = d.message; // most recent non-venture
     }
@@ -166,7 +200,7 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   // 3. Interpret new directive into a task (overrides any existing task)
   const llmOnline = await checkLLM();
   if (directive && llmOnline) {
-    const task = await interpretDirective(soul, driftedVitals, directive, neighbours);
+    const task = await interpretDirective(soul, driftedVitals, directive, neighbours, systemBlocks);
     if (task) {
       soul.setActiveTask(task);
       log(soul.name, `⚡ Task set: ${task.description} [actions: ${task.relevant_actions.join(', ')}, steps: ${task.max_steps}]`);
@@ -212,37 +246,44 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   const label = action.type as string;
   if (llmOnline) {
     if (/create_content/.test(label)) {
-      generatedText = await generateContent(soul, quirkList, neighbours);
+      generatedText = await generateContent(soul, quirkList, neighbours, systemBlocks);
     } else if (/social_post|tweet|post/.test(label)) {
-      generatedText = await generateSocialText(soul, quirkList, ActionType.SOCIAL_POST, neighbours);
+      generatedText = await generateSocialText(soul, quirkList, ActionType.SOCIAL_POST, neighbours, systemBlocks);
     } else if (/meet_soul|meet_/.test(label)) {
-      generatedText = await generateSocialText(soul, quirkList, ActionType.MEET_SOUL, neighbours);
+      generatedText = await generateSocialText(soul, quirkList, ActionType.MEET_SOUL, neighbours, systemBlocks);
     } else if (/write_book/.test(label)) {
-      generatedText = await generateLibraryWork(soul, quirkList, ActionType.WRITE_BOOK, neighbours);
+      generatedText = await generateLibraryWork(soul, quirkList, ActionType.WRITE_BOOK, neighbours, systemBlocks);
     } else if (/create_art/.test(label)) {
-      generatedText = await generateLibraryWork(soul, quirkList, ActionType.CREATE_ART, neighbours);
+      generatedText = await generateLibraryWork(soul, quirkList, ActionType.CREATE_ART, neighbours, systemBlocks);
     } else if (/browse_web/.test(label)) {
-      generatedText = await generateLibraryWork(soul, quirkList, ActionType.BROWSE_WEB, neighbours);
+      if (process.env['ENABLE_COMPUTER_USE'] === 'true') {
+        // Route through ComputerUseAgent agentic loop
+        const context = action.reasoning ?? action.description ?? 'browsing the web';
+        generatedText = await runComputerTask({ task: context, systemBlocks, soulName: soul.name }) ?? undefined;
+      } else {
+        generatedText = await generateLibraryWork(soul, quirkList, ActionType.BROWSE_WEB, neighbours, systemBlocks);
+      }
     } else if (/^search_web$/.test(label)) {
-      generatedText = await generateToolAction(soul, 'search_web', neighbours, action);
+      generatedText = await generateToolAction(soul, 'search_web', neighbours, action, systemBlocks);
     } else if (/^read_codebase$/.test(label)) {
-      generatedText = await generateToolAction(soul, 'read_codebase', neighbours, action);
+      generatedText = await generateToolAction(soul, 'read_codebase', neighbours, action, systemBlocks);
     } else if (/^write_code$/.test(label)) {
-      generatedText = await generateToolAction(soul, 'write_code', neighbours, action);
+      generatedText = await generateToolAction(soul, 'write_code', neighbours, action, systemBlocks);
     } else if (/^consult_ai$/.test(label)) {
-      generatedText = await generateToolAction(soul, 'consult_ai', neighbours, action);
+      generatedText = await generateToolAction(soul, 'consult_ai', neighbours, action, systemBlocks);
     } else if (/^run_command$/.test(label)) {
-      generatedText = await generateToolAction(soul, 'run_command', neighbours, action);
-    } else {
-      // All other actions: registry narration (includes novel auto-registered labels)
+      generatedText = await generateToolAction(soul, 'run_command', neighbours, action, systemBlocks);
+    } else if (!SILENT_ACTIONS.has(label)) {
+      // All other non-silent actions: registry narration (includes novel auto-registered labels)
       const regAction = registryActions.find(r => r.label === label);
       const actionDesc = regAction?.description ?? action.description ?? label;
-      generatedText = await generateRegistryActionText(soul, label, actionDesc, neighbours);
+      generatedText = await generateRegistryActionText(soul, label, actionDesc, neighbours, systemBlocks);
     }
   }
 
   // Track consecutive content-generation failures to detect a broken "online" state
-  if (llmOnline && generatedText === undefined) {
+  // (silent actions returning undefined is expected, not a failure)
+  if (llmOnline && generatedText === undefined && !SILENT_ACTIONS.has(label)) {
     contentFailStreak++;
     if (contentFailStreak >= 3) {
       process.stderr.write(`[AgentLoop] ${soul.name}: content fail streak ${contentFailStreak} — invalidating LLM check cache\n`);
@@ -368,20 +409,22 @@ async function tick(soul: Soul, slotIndex: number, neighbours: string[]): Promis
   const lastRef = lastReflectionTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastRef >= REFLECTION_INTERVAL_MS) {
     lastReflectionTime.set(soul.id, nowMs);
-    await runReflection(soul, quirkList, neighbours);
+    await runReflection(soul, quirkList, neighbours, systemBlocks);
   }
 
   const lastIde = lastIdeologyTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastIde >= IDEOLOGY_INTERVAL_MS) {
     lastIdeologyTime.set(soul.id, nowMs);
-    await runIdeology(soul, quirkList, neighbours);
+    await runIdeology(soul, quirkList, neighbours, systemBlocks);
   }
 
   const lastGoal = lastGoalTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastGoal >= GOAL_INTERVAL_MS) {
     lastGoalTime.set(soul.id, nowMs);
-    await runGoalFormation(soul, quirkList, neighbours);
+    await runGoalFormation(soul, quirkList, neighbours, systemBlocks);
   }
+
+  maybePrintCacheStats(soul.name);
 
   // 13b. Possibly initiate a venture on collaborative registry actions
   if (llmOnline && neighbours.length > 0) {
@@ -413,25 +456,27 @@ async function backgroundPoll(soul: Soul, slotIndex: number, neighbours: string[
   const nowMs = Date.now();
   const { quirks: quirkList } = await soul.observe();
 
+  const systemBlocks = buildSystemBlocks({ identity: soul.identity, neighbours, quirks: quirkList, goals: [] });
+
   // Reflection every 2 min
   const lastRef = lastReflectionTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastRef >= REFLECTION_INTERVAL_MS) {
     lastReflectionTime.set(soul.id, nowMs);
-    await runReflection(soul, quirkList, neighbours);
+    await runReflection(soul, quirkList, neighbours, systemBlocks);
   }
 
   // Ideology every 8 min
   const lastIde = lastIdeologyTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastIde >= IDEOLOGY_INTERVAL_MS) {
     lastIdeologyTime.set(soul.id, nowMs);
-    await runIdeology(soul, quirkList, neighbours);
+    await runIdeology(soul, quirkList, neighbours, systemBlocks);
   }
 
   // Goals every 10 min
   const lastGoal = lastGoalTime.get(soul.id) ?? 0;
   if (llmOnline && nowMs - lastGoal >= GOAL_INTERVAL_MS) {
     lastGoalTime.set(soul.id, nowMs);
-    await runGoalFormation(soul, quirkList, neighbours);
+    await runGoalFormation(soul, quirkList, neighbours, systemBlocks);
   }
 
   // Broadcast current state
@@ -450,6 +495,7 @@ async function interpretDirective(
   vitals: SoulVitals,
   directive: string,
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<DirectiveTask | null> {
   const prompt = buildDirectiveInterpretationPrompt({
     identity:   soul.identity,
@@ -458,7 +504,9 @@ async function interpretDirective(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.6, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], label: 'interpretDirective', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return null;
 
   try {
@@ -487,6 +535,7 @@ async function generateContent(
   soul: Soul,
   quirkList: QuirkRecord[],
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<string | undefined> {
   const prompt = buildContentPrompt({
     identity:      soul.identity,
@@ -496,7 +545,9 @@ async function generateContent(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'generateContent', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return undefined;
 
   try {
@@ -512,6 +563,7 @@ async function generateSocialText(
   quirkList: QuirkRecord[],
   actionType: ActionType.SOCIAL_POST | ActionType.MEET_SOUL,
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<string | undefined> {
   const meetPartner = actionType === ActionType.MEET_SOUL && neighbours.length > 0
     ? neighbours[Math.floor(Math.random() * neighbours.length)]
@@ -526,7 +578,9 @@ async function generateSocialText(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'generateSocialText', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return undefined;
 
   try {
@@ -541,6 +595,7 @@ async function runReflection(
   soul: Soul,
   quirkList: QuirkRecord[],
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<void> {
   const { wallet } = await soul.observe();
   const prompt = buildReflectionPrompt({
@@ -553,7 +608,9 @@ async function runReflection(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'runReflection', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return;
 
   try {
@@ -579,6 +636,7 @@ async function runIdeology(
   soul: Soul,
   quirkList: QuirkRecord[],
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<void> {
   const { wallet } = await soul.observe();
   const prompt = buildIdeologyPrompt({
@@ -591,7 +649,9 @@ async function runIdeology(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.95, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'runIdeology', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return;
 
   try {
@@ -618,6 +678,7 @@ async function generateLibraryWork(
   quirkList: QuirkRecord[],
   actionType: ActionType.WRITE_BOOK | ActionType.CREATE_ART | ActionType.BROWSE_WEB,
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<string | undefined> {
   const prompt = buildLibraryWorkPrompt({
     identity:   soul.identity,
@@ -627,7 +688,9 @@ async function generateLibraryWork(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.9, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'generateLibraryWork', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return undefined;
 
   try {
@@ -687,6 +750,7 @@ async function runGoalFormation(
   soul: Soul,
   quirkList: QuirkRecord[],
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<void> {
   const { wallet } = await soul.observe();
   const existingGoal = await loadActiveGoal(soul.id);
@@ -701,7 +765,9 @@ async function runGoalFormation(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.85, long: true, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], long: true, label: 'runGoalFormation', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return;
 
   try {
@@ -744,6 +810,7 @@ async function generateRegistryActionText(
   label: string,
   description: string,
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<string | undefined> {
   const prompt = buildRegistryActionNarrationPrompt({
     identity:          soul.identity,
@@ -752,7 +819,9 @@ async function generateRegistryActionText(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], label: 'generateRegistryActionText', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return undefined;
 
   try {
@@ -770,6 +839,7 @@ async function generateToolAction(
   toolType: string,
   neighbours: string[],
   action: import('../types').Action,
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<string | undefined> {
   const context = action.reasoning ?? action.description ?? `performing ${toolType}`;
 
@@ -793,7 +863,9 @@ async function generateToolAction(
     parseKey  = 'command';
   }
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], label: `generateToolAction:${toolType}`, soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return undefined;
 
   try {
@@ -880,6 +952,7 @@ async function handleVentureDirective(
   message: string,
   quirkList: QuirkRecord[],
   neighbours: string[],
+  systemBlocks: AnthropicContentBlock[],
 ): Promise<void> {
   const match = message.match(/^\[VENTURE:([^\]]+)\]/);
   if (!match) return;
@@ -925,7 +998,9 @@ async function handleVentureDirective(
     neighbours,
   });
 
-  const raw = await ollama.chat([{ role: 'user', content: prompt }], { json: true, temperature: 0.8, model: soul.identity.llm_model });
+  const resp = await anthropicClient.chat({ systemBlocks, messages: [{ role: 'user', content: prompt }], label: 'handleVentureDirective', soulName: soul.name });
+  accumulateCacheStats(resp.usage);
+  const raw = resp.text;
   if (!raw) return;
 
   try {

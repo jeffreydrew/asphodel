@@ -5,6 +5,7 @@ import { buildWorldUpdate } from '../world/WorldState';
 import { WorldLog } from '../world/WorldLog';
 import { enqueue } from '../world/DirectiveQueue';
 import { ollama } from '../llm/OllamaClient';
+import { usageTracker } from '../llm/UsageTracker';
 import { Significance } from '../types';
 
 const worldLog = new WorldLog();
@@ -232,6 +233,35 @@ export function createHttpServer(port: number): void {
     });
 
     res.json({ response: text });
+  });
+
+  // ── Stats (token usage, cost, world metrics) ──────────────────────────────
+  app.get('/stats', async (_req, res) => {
+    const windowSec = Number(_req.query['window'] ?? 3600);
+    const windowMs  = Math.min(Math.max(windowSec, 60), 7 * 24 * 3600) * 1_000;
+
+    const usage = usageTracker.getStats(windowMs);
+
+    // World metrics from DB
+    const pool = getPool();
+    const [soulsRes, tickRes, actionsRes] = await Promise.all([
+      pool.query<{ cnt: string }>('SELECT COUNT(*) as cnt FROM souls WHERE is_active = TRUE'),
+      pool.query<{ tick: number }>('SELECT tick FROM souls WHERE is_active = TRUE ORDER BY tick DESC LIMIT 1'),
+      pool.query<{ cnt: string }>(`SELECT COUNT(*) as cnt FROM world_log WHERE ts > $1`, [Date.now() - 3_600_000]),
+    ]);
+
+    res.json({
+      uptime_s:     Math.round(process.uptime()),
+      memory_mb:    Math.round(process.memoryUsage().rss / 1024 / 1024),
+      model:        process.env['ANTHROPIC_MODEL'] ?? 'claude-haiku-4-5',
+      window_s:     windowSec,
+      llm:          usage,
+      world: {
+        souls_active:       Number((soulsRes.rows[0] as Record<string,string>)?.['cnt'] ?? 0),
+        tick:               Number((tickRes.rows[0] as Record<string,number>)?.['tick'] ?? 0),
+        actions_last_hour:  Number((actionsRes.rows[0] as Record<string,string>)?.['cnt'] ?? 0),
+      },
+    });
   });
 
   // ── Admin: deactivate / reactivate ────────────────────────────────────────

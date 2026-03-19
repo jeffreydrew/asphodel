@@ -197,11 +197,16 @@ export class EditMode {
     });
 
     // Axis nudge buttons
-    document.querySelectorAll('.edit-axis-btn').forEach(btn => {
+    const axisButtons = document.querySelectorAll('.edit-axis-btn');
+    console.log('Found axis buttons:', axisButtons.length);
+    axisButtons.forEach(btn => {
+      console.log('Setting up listener for button:', btn.dataset.axis, btn.dataset.dir);
       btn.addEventListener('click', () => {
+        console.log('Axis button clicked:', btn.dataset.axis, btn.dataset.dir);
         const axis = btn.dataset.axis;
         const dir  = parseFloat(btn.dataset.dir);
         const step = parseFloat(document.getElementById('edit-axis-step').value);
+        console.log('Axis:', axis, 'Dir:', dir, 'Step:', step);
         this._nudgeSelected(axis, dir * step);
       });
     });
@@ -455,10 +460,13 @@ export class EditMode {
   }
 
   _nudgeSelected(axis, delta) {
+    console.log('_nudgeSelected called with:', axis, delta, 'selected:', !!this._selected);
     if (!this._selected) return;
     const oldPos = this._selected.position.clone();
+    console.log('Old position:', oldPos);
     this._selected.position[axis] += delta;
     const newPos = this._selected.position.clone();
+    console.log('New position:', newPos);
     this._pushUndo({ type: 'move', data: { obj: this._selected, oldPos, newPos } });
     if (this._selected.userData?.isEditableWall) invalidateAllNavGrids();
     this._updateHighlight();

@@ -29,10 +29,10 @@ export class HardcodedDecider {
 
     // ── Priority 2: quirk overrides ──────────────────────────────────────────
 
-    // marketplace_hustler: frequently checks job boards
+    // marketplace_hustler: frequently searches for opportunities online
     const hustler = persistedQuirks.find(q => q.quirk_id === 'marketplace_hustler');
     if (hustler && Math.random() < hustler.strength * 0.4) {
-      return { type: 'browse_jobs', payload: {} };
+      return { type: 'search_web', payload: {} };
     }
 
     // recluse: avoids social when unhappy
@@ -40,7 +40,7 @@ export class HardcodedDecider {
     if (recluse) {
       return {
         type: weightedRandom(
-          ['browse_jobs', 'create_content', 'exercise', 'idle'],
+          ['browse_web', 'create_content', 'exercise', 'idle'],
           [0.40, 0.35, 0.15, 0.10],
         ),
         payload: {},
@@ -58,14 +58,9 @@ export class HardcodedDecider {
       return { type: 'exercise', payload: {} };
     }
 
-    // ── Priority 4: submit if we browsed last tick and found jobs ────────────
-    if (lastReward && lastReward.r_profit > 0 && Math.random() < 0.5) {
-      return { type: 'submit_application', payload: {} };
-    }
-
     // ── Priority 5: weighted random based on soul's reward weights ───────────
     const candidates = [
-      'browse_jobs',
+      'search_web',
       'create_content',
       'meet_soul',
       'social_post',

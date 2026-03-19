@@ -86,3 +86,8 @@ export async function getLog({ soulId, since, significance, limit = 200 } = {}) 
   const res = await fetch(`${HTTP_BASE}/log?${params}`);
   return res.ok ? res.json() : [];
 }
+
+export async function getStats(windowSec = 3600) {
+  const res = await fetch(`${HTTP_BASE}/stats?window=${windowSec}`);
+  return res.ok ? res.json() : null;
+}

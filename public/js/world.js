@@ -14,6 +14,7 @@ import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { onWorldUpdate, onSpeechBubble, connect } from './api.js';
 import { initHUD, updateHUD, openSoulPanel, populateSoulSelect } from './hud.js';
+import { initStats, wireStatsFilters } from './stats.js';
 
 import { FLOORS, WALL_HEIGHT, FLOOR_SIZE } from './world/constants.js';
 import { buildTower, setupLights }         from './world/builders.js';
@@ -72,6 +73,8 @@ export function init() {
   connect();
   initHUD();
   initFloorFilter();
+  initStats();
+  wireStatsFilters();
 
   editMode = new EditMode({
     scene,

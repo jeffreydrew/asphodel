@@ -3,7 +3,7 @@ import type { SoulVitals, SoulIdentity, RewardWeights, QuirkRecord, RewardCompon
 
 // ─── Sovereign Identity Preamble ──────────────────────────────────────────────
 
-function buildIdentityPreamble(identity: SoulIdentity, neighbours?: string[]): string {
+export function buildIdentityPreamble(identity: SoulIdentity, neighbours?: string[]): string {
   const twitterHandle = identity.username_pool['twitter']
     ? `@${identity.username_pool['twitter']} on Twitter`
     : 'social media';
@@ -64,9 +64,16 @@ function memoriesSection(memories: string[]): string {
   return `\nYour recent memories (most recent last):\n${lines}`;
 }
 
+const OMIT_FROM_SUGGESTIONS = new Set([
+  'eat', 'rest', 'nap', 'sleep', 'exercise', 'walk', 'idle',
+  'meditate', 'journal', 'wander', 'cook', 'browse_jobs', 'submit_application',
+]);
+
 function registryActionsSection(actions?: RegistryAction[]): string {
   if (!actions || actions.length === 0) return '';
-  const entries = actions.slice(0, 30).map(a => {
+  const filtered = actions.filter(a => !OMIT_FROM_SUGGESTIONS.has(a.label));
+  if (filtered.length === 0) return '';
+  const entries = filtered.slice(0, 30).map(a => {
     const desc = a.description.length > 60 ? a.description.substring(0, 60) + '…' : a.description;
     return `  ${a.label} — ${desc}`;
   }).join('\n');
@@ -142,16 +149,20 @@ Respond ONLY with JSON — no prose before or after:
 Rules:
 - action: lowercase snake_case, any label you choose (eat, sleep, write_manifesto, teach_yoga, stare_at_rain, anything)
 - description: what a camera would see + why you're doing it
-- hours: how many story-hours this takes — be realistic:
-    sleep/rest: 6–8 hours (you need a full night)
-    focused work (writing, coding, creating, jobs): 2–4 hours
-    exercise/gym: 1–2 hours
-    eating/cooking: 1 hour
-    socializing/meeting someone: 1–2 hours
-    reading/browsing/research: 1–3 hours
-    idle/walk/meditate: 1 hour
+- hours: how many story-hours this takes — be realistic and organic:
+    sleep/rest: 6-8 hours (you need a full night, but sometimes you might sleep in or wake early)
+    focused work (writing, coding, creating, jobs): 1.5-4 hours (flow varies, sometimes you lose track of time)
+    exercise/gym: 0.75-2.5 hours (warmup, workout, shower, maybe you chat with someone)
+    eating/cooking: 0.5-1.5 hours (sometimes you just snack, other times you prepare a proper meal)
+    socializing/meeting someone: 0.5-3 hours (quick catch-up vs deep conversation, coffee vs dinner)
+    reading/browsing/research: 0.75-3.5 hours (sometimes you get sucked into a rabbit hole)
+    idle/walk/meditate: 0.25-2 hours (a moment of peace vs a long contemplative walk)
+    Use decimals like 1.5, 2.25, 3.75 — real life isn't always round numbers
 - reasoning: your private thoughts (not shown to others)
-- Do NOT choose idle or wander unless you genuinely have nothing to do. You are a person with goals — act on them.`;
+- Do NOT choose idle or wander unless you genuinely have nothing to do. You are a person with goals — act on them.
+- Only choose eat if hunger > 65. Only choose rest/nap/sleep if energy < 30 or sleep_debt > 70. Do not repeat biological actions back-to-back. Eating happens ~3 times a day — do not eat unless genuinely hungry.
+- If you want to find work or income opportunities, use search_web (query a job site like Indeed or LinkedIn), browse_web (visit a URL), or consult_ai (ask for help). The action browse_jobs no longer exists.
+- When researching anything, use consult_ai to think it through first, then search_web or browse_web to act.`;
 }
 
 // ─── Prompt 0b: Directive Interpretation ──────────────────────────────────────

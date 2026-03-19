@@ -85,7 +85,9 @@ export class LLMDecider {
     soulId: string,
   ): Promise<{ label: string; reasoning: string; hours: number; description: string } | null> {
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // Strip markdown code fences that some models wrap JSON in
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
       // Normalize action label
       let label = typeof parsed['action'] === 'string'
@@ -105,7 +107,7 @@ export class LLMDecider {
       }
 
       const hours = typeof parsed['hours'] === 'number'
-        ? Math.max(1, Math.min(8, Math.round(parsed['hours'])))
+        ? Math.max(0.25, Math.min(8, parsed['hours']))
         : 1;
 
       return {
