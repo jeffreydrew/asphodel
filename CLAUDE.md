@@ -75,7 +75,7 @@ drain DirectiveQueue
 ### Design rules (don't break these)
 - **Identity preamble first.** All prompt builders call `buildIdentityPreamble(identity, neighbours)` before any decision context.
 - **Reward weights are per-soul** and stored in DB — never shared state.
-- **Two Ollama timeouts:** decisions = `OLLAMA_TIMEOUT_MS` (30s), content/social/reflection = `OLLAMA_CONTENT_TIMEOUT_MS` (90s) via `{ long: true }`.
+- **Two LLM timeouts:** decisions = `OLLAMA_TIMEOUT_MS` (30s), content/social/reflection = `OLLAMA_CONTENT_TIMEOUT_MS` (90s) via `{ long: true }`. Applied to all providers.
 - **All integrations fail silently** if env vars absent.
 - **Directives:** `POST /directives` → `DirectiveQueue.enqueue()` → `drain()` at tick start → appended to decision prompt.
 
@@ -87,17 +87,37 @@ Seed at 5 reinforcements → persist at 15 → only **persisted** quirks injecte
 ## Infrastructure
 
 - **App server:** `128.140.7.97` (Hetzner CX32) — Node + Nginx + PM2
-- **Ollama server:** `178.104.95.182` (Hetzner CX42) — qwen2.5:7b
+- **Ollama server:** `178.104.95.182` (Hetzner CX42) — qwen2.5:7b (fallback only)
 - **SSH key:** `.ssh/id_ed25519` (gitignored)
+
+### LLM providers (`src/llm/LLMClient.ts`)
+
+| Provider | Endpoint | Model | Used for |
+|----------|----------|-------|---------|
+| **Groq** | `https://api.groq.com/openai/v1/chat/completions` | `llama-3.3-70b-versatile` | Primary (decisions) |
+| **Together AI** | `https://api.together.xyz/v1/chat/completions` | `Qwen/Qwen2.5-72B-Instruct-Turbo` | Quality (`long: true`) |
+| **Ollama** | `$OLLAMA_URL/api/chat` | `$OLLAMA_MODEL` | Fallback if API fails |
+
+**Routing:** `long: true` or `quality: true` → Together AI. All others → Groq. Either → Ollama on failure.
 
 ---
 
 ## Critical Env Vars
 
 ```
+# LLM — dual-provider
+GROQ_API_KEY                # Groq API key (primary provider)
+TOGETHER_API_KEY            # Together AI key (quality provider)
+LLM_PRIMARY_PROVIDER        # groq | together | ollama (default: groq)
+LLM_QUALITY_PROVIDER        # groq | together | ollama (default: together)
+LLM_FALLBACK_PROVIDER       # groq | together | ollama (default: ollama)
+
+# Ollama fallback
 OLLAMA_URL                  # tunnel: localhost:11434 | prod: http://178.104.95.182:11434
+OLLAMA_MODEL                # default qwen2.5:7b
 OLLAMA_TIMEOUT_MS           # default 30000
 OLLAMA_CONTENT_TIMEOUT_MS   # default 90000
+
 COOLDOWN_SCALE              # 1=fast dev, 10=prod pacing
 ENABLE_BROWSER=true         # activates Playwright (needs: npx playwright install chromium)
 ENABLE_REAL_MONEY=true      # + STRIPE_SECRET_KEY → routes wallet to Stripe Connect
